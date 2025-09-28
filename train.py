@@ -128,18 +128,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             Ll1 = l1_loss(language_feature*language_feature_mask, gt_language_feature*language_feature_mask)            
             loss = Ll1
         else:
-	        gt_image = viewpoint_cam.original_image.cuda()
-	        Ll1 = l1_loss(image, gt_image)
-	        if FUSED_SSIM_AVAILABLE:
-	            ssim_value = fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
-	        else:
-	            ssim_value = ssim(image, gt_image)
+            gt_image = viewpoint_cam.original_image.cuda()
+            Ll1 = l1_loss(image, gt_image)
+            if FUSED_SSIM_AVAILABLE:
+                ssim_value = fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
+            else:
+                ssim_value = ssim(image, gt_image)
 
-        	loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)
+            loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)
 
-	        # Depth regularization
-	        Ll1depth_pure = 0.0
-	        if depth_l1_weight(iteration) > 0 and viewpoint_cam.depth_reliable:
+            # Depth regularization
+            Ll1depth_pure = 0.0
+            if depth_l1_weight(iteration) > 0 and viewpoint_cam.depth_reliable:
                 invDepth = render_pkg["depth"]
                 mono_invdepth = viewpoint_cam.invdepthmap.cuda()
                 depth_mask = viewpoint_cam.depth_mask.cuda()
@@ -148,8 +148,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 Ll1depth = depth_l1_weight(iteration) * Ll1depth_pure 
                 loss += Ll1depth
                 Ll1depth = Ll1depth.item()
-	        else:
-	            Ll1depth = 0
+            else:
+                Ll1depth = 0
 
         loss.backward()
 
@@ -173,18 +173,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 scene.save(iteration)
 
             # Densification
-			if not opt.include_feature:
+            if not opt.include_feature:
                 if iteration < opt.densify_until_iter:
-	                # Keep track of max radii in image-space for pruning
-	                gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-	                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+                    # Keep track of max radii in image-space for pruning
+                    gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+                    gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
-	                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-	                    size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-	                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii)
+                    if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                        size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                        gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii)
                 
-	                if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
-	                    gaussians.reset_opacity()
+                    if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
+                        gaussians.reset_opacity()
 
             # Optimizer step
             if iteration < opt.iterations:

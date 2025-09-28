@@ -54,7 +54,7 @@ class ModelParams(ParamGroup):
         self._depths = ""
         self._resolution = -1
         self._white_background = False
-		self._feature_level = -1
+        self._feature_level = -1
         self.train_test_exp = False
         self.data_device = "cuda"
         self.eval = False
@@ -84,7 +84,7 @@ class OptimizationParams(ParamGroup):
         self.feature_lr = 0.0025
         self.opacity_lr = 0.025
         self.language_feature_lr = 0.0025 # TODO: update
-        self.include_feature = True # Set to False if train the original gs
+        self.include_feature = False # Set to False if train the original gs
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
         self.exposure_lr_init = 0.01

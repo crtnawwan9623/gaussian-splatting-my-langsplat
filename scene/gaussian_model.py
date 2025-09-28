@@ -168,7 +168,7 @@ class GaussianModel:
     def get_opacity(self):
         return self.opacity_activation(self._opacity)
     
-	@property
+    @property
     def get_language_feature(self):
         if self._language_feature is not None:
             return self._language_feature
