@@ -48,11 +48,13 @@ class ModelParams(ParamGroup):
     def __init__(self, parser, sentinel=False):
         self.sh_degree = 3
         self._source_path = ""
-        self._model_path = ""
+        self._model_path = "" 
+        self._language_features_name = "language_features_dim3"
         self._images = "images"
         self._depths = ""
         self._resolution = -1
         self._white_background = False
+		self._feature_level = -1
         self.train_test_exp = False
         self.data_device = "cuda"
         self.eval = False
@@ -61,6 +63,7 @@ class ModelParams(ParamGroup):
     def extract(self, args):
         g = super().extract(args)
         g.source_path = os.path.abspath(g.source_path)
+        g.lf_path = os.path.join(g.source_path, g.language_features_name)
         return g
 
 class PipelineParams(ParamGroup):
@@ -80,6 +83,8 @@ class OptimizationParams(ParamGroup):
         self.position_lr_max_steps = 30_000
         self.feature_lr = 0.0025
         self.opacity_lr = 0.025
+        self.language_feature_lr = 0.0025 # TODO: update
+        self.include_feature = True # Set to False if train the original gs
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
         self.exposure_lr_init = 0.01

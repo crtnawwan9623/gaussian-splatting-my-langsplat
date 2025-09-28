@@ -8,6 +8,7 @@
 #
 # For inquiries contact  george.drettakis@inria.fr
 #
+import time
 
 import torch
 import math
@@ -15,7 +16,7 @@ from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianR
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, separate_sh = False, override_color = None, use_trained_exp=False):
+def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, opt, scaling_modifier = 1.0, separate_sh = False, override_color = None, use_trained_exp=False):
     """
     Render the scene. 
     
@@ -46,7 +47,8 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         campos=viewpoint_camera.camera_center,
         prefiltered=False,
         debug=pipe.debug,
-        antialiasing=pipe.antialiasing
+        antialiasing=pipe.antialiasing,
+		include_feature=opt.include_feature
     )
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
@@ -86,29 +88,41 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     else:
         colors_precomp = override_color
 
-    # Rasterize visible Gaussians to image, obtain their radii (on screen). 
+    if opt.include_feature:
+        language_feature_precomp = pc.get_language_feature
+        language_feature_precomp = language_feature_precomp/ (language_feature_precomp.norm(dim=-1, keepdim=True) + 1e-9)
+        # language_feature_precomp = torch.sigmoid(language_feature_precomp)
+    else:
+        language_feature_precomp = torch.zeros((1,), dtype=opacity.dtype, device=opacity.device)
+
+    # Rasterize visible Gaussians to image, obtain their radii (on screen).
+	# start_time = time.time() 
     if separate_sh:
-        rendered_image, radii, depth_image = rasterizer(
+        rendered_image, language_feature_image, radii, depth_image = rasterizer(
             means3D = means3D,
             means2D = means2D,
             dc = dc,
             shs = shs,
             colors_precomp = colors_precomp,
+			language_feature_precomp = language_feature_precomp,
             opacities = opacity,
             scales = scales,
             rotations = rotations,
             cov3D_precomp = cov3D_precomp)
     else:
-        rendered_image, radii, depth_image = rasterizer(
+        rendered_image, language_feature_image, radii, depth_image = rasterizer(
             means3D = means3D,
             means2D = means2D,
             shs = shs,
             colors_precomp = colors_precomp,
+			language_feature_precomp = language_feature_precomp,
             opacities = opacity,
             scales = scales,
             rotations = rotations,
             cov3D_precomp = cov3D_precomp)
-        
+	# end_time = time.time()
+	# print('render_init_rasterizer程序运行时间为: %s Seconds'%(end_time-start_time))
+	
     # Apply exposure to rendered image (training only)
     if use_trained_exp:
         exposure = pc.get_exposure_from_name(viewpoint_camera.image_name)
@@ -119,6 +133,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     rendered_image = rendered_image.clamp(0, 1)
     out = {
         "render": rendered_image,
+		"language_feature_image": language_feature_image,
         "viewspace_points": screenspace_points,
         "visibility_filter" : (radii > 0).nonzero(),
         "radii": radii,
