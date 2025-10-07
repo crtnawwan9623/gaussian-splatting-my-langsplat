@@ -129,7 +129,7 @@ class GaussianModel:
             denom,
             opt_dict, 
             self.spatial_lr_scale) = model_args
-            if not training_args.include_feature: # 如果是以原始gs为初始化来训练feature的话，就不需要restore optimizer
+            if not training_args.include_feature and mode == 'train': # 如果是以原始gs为初始化来训练feature的话，就不需要restore optimizer
                 self.optimizer.load_state_dict(opt_dict)
         
         if mode == 'train':

@@ -14,7 +14,7 @@ def l2_loss(network_output, gt):
     return ((network_output - gt) ** 2).mean()
 
 def cos_loss(network_output, gt):
-    return 1 - F.cosine_similarity(network_output, gt, dim=0).mean()
+    return 1 - F.cosine_similarity(network_output, gt, dim=-1).mean()
 
 
 if __name__ == '__main__':
@@ -94,7 +94,7 @@ if __name__ == '__main__':
                 data = feature.to("cuda:0")
                 with torch.no_grad():
                     outputs = model(data) 
-                loss = l2_loss(outputs, data) + cos_loss(outputs, data)
+                loss = l2_loss(outputs, data) + cos_loss(outputs, data)* 0.001
                 eval_loss += loss * len(feature)
             eval_loss = eval_loss / len(train_dataset)
             print("eval_loss:{:.8f}".format(eval_loss))

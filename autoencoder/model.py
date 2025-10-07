@@ -27,20 +27,20 @@ class Autoencoder(nn.Module):
     def forward(self, x):
         for m in self.encoder:
             x = m(x)
-        x = x / x.norm(dim=-1, keepdim=True)
+        x = x / (x.norm(dim=-1, keepdim=True)+1e-8)
         for m in self.decoder:
             x = m(x)
-        x = x / x.norm(dim=-1, keepdim=True)
+        x = x / (x.norm(dim=-1, keepdim=True)+1e-8)
         return x
     
     def encode(self, x):
         for m in self.encoder:
             x = m(x)    
-        x = x / x.norm(dim=-1, keepdim=True)
+        x = x / (x.norm(dim=-1, keepdim=True)+1e-8)
         return x
 
     def decode(self, x):
         for m in self.decoder:
             x = m(x)    
-        x = x / x.norm(dim=-1, keepdim=True)
+        x = x / (x.norm(dim=-1, keepdim=True)+1e-8)
         return x
