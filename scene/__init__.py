@@ -15,6 +15,7 @@ import json
 from utils.system_utils import searchForMaxIteration
 from scene.dataset_readers import sceneLoadTypeCallbacks
 from scene.gaussian_model import GaussianModel
+from scene.deform_model import DeformModel
 from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
 
@@ -45,6 +46,18 @@ class Scene:
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
             print("Found transforms_train.json file, assuming Blender data set!")
             scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.depths, args.eval)
+        elif os.path.exists(os.path.join(args.source_path, "cameras_sphere.npz")):
+            print("Found cameras_sphere.npz file, assuming DTU data set!")
+            scene_info = sceneLoadTypeCallbacks["DTU"](args.source_path, "cameras_sphere.npz", "cameras_sphere.npz")
+        elif os.path.exists(os.path.join(args.source_path, "dataset.json")):
+            print("Found dataset.json file, assuming Nerfies data set!")
+            scene_info = sceneLoadTypeCallbacks["nerfies"](args.source_path, args.eval)
+        elif os.path.exists(os.path.join(args.source_path, "poses_bounds.npy")):
+            print("Found calibration_full.json, assuming Neu3D data set!")
+            scene_info = sceneLoadTypeCallbacks["plenopticVideo"](args.source_path, args.eval, 24)
+        elif os.path.exists(os.path.join(args.source_path, "transforms.json")):
+            print("Found calibration_full.json, assuming Dynamic-360 data set!")
+            scene_info = sceneLoadTypeCallbacks["dynamic360"](args.source_path)
         else:
             assert False, "Could not recognize scene type!"
 

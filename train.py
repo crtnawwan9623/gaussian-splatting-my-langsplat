@@ -15,8 +15,8 @@ from random import randint
 from utils.loss_utils import l1_loss, ssim
 from gaussian_renderer import render, network_gui
 import sys
-from scene import Scene, GaussianModel
-from utils.general_utils import safe_state, get_expon_lr_func
+from scene import Scene, GaussianModel, DeformModel
+from utils.general_utils import safe_state, get_expon_lr_func, get_linear_noise_func
 import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr
@@ -48,6 +48,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type)
+    deform = DeformModel(dataset.is_blender, dataset.is_6dof)
+    deform.train_setting(opt)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
 
@@ -76,6 +78,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     Ll1depth = 0
 
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
+    smooth_term = get_linear_noise_func(lr_init=0.1, lr_final=1e-15, lr_delay_mult=0.01, max_steps=20000)
     first_iter += 1
     for iteration in range(first_iter, opt.iterations + 1):
         if network_gui.conn == None:
@@ -85,7 +88,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 net_image_bytes = None
                 custom_cam, do_training, pipe.convert_SHs_python, pipe.compute_cov3D_python, keep_alive, scaling_modifer = network_gui.receive()
                 if custom_cam != None:
-                    net_image = render(custom_cam, gaussians, pipe, background, opt, scaling_modifier=scaling_modifer, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE)["render"]
+                    net_image = render(custom_cam, gaussians, d_xyz, d_rotation, d_scaling, dataset.is_6dof, pipe, background, opt, scaling_modifier=scaling_modifer, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE)["render"]
                     net_image_bytes = memoryview((torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy())
                 network_gui.send(net_image_bytes, dataset.source_path)
                 if do_training and ((iteration < int(opt.iterations)) or not keep_alive):
@@ -96,6 +99,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         iter_start.record()
 
         gaussians.update_learning_rate(iteration)
+        deform.update_learning_rate(iteration)
 
         # Every 1000 its we increase the levels of SH up to a maximum degree
         if iteration % 1000 == 0:
@@ -105,17 +109,33 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
             viewpoint_indices = list(range(len(viewpoint_stack)))
+            total_frame = len(viewpoint_stack)
+            time_interval = 1 / total_frame
         rand_idx = randint(0, len(viewpoint_indices) - 1)
         viewpoint_cam = viewpoint_stack.pop(rand_idx)
         vind = viewpoint_indices.pop(rand_idx)
+		
+        if dataset.load2gpu_on_the_fly:
+            viewpoint_cam.load2device()
+			
+        fid = viewpoint_cam.fid
+        
+        if iteration < opt.warm_up:
+            d_xyz, d_rotation, d_scaling = 0.0, 0.0, 0.0
+        else:
+            N = gaussians.get_xyz.shape[0]
+            time_input = fid.unsqueeze(0).expand(N, -1)
 
+            ast_noise = 0 if dataset.is_blender else torch.randn(1, 1, device='cuda').expand(N, -1) * time_interval * smooth_term(iteration)
+            d_xyz, d_rotation, d_scaling = deform.step(gaussians.get_xyz.detach(), time_input + ast_noise)
+			
         # Render
         if (iteration - 1) == debug_from:
             pipe.debug = True
 
         bg = torch.rand((3), device="cuda") if opt.random_background else background
 
-        render_pkg = render(viewpoint_cam, gaussians, pipe, bg, opt, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE)
+        render_pkg = render(viewpoint_cam, gaussians, d_xyz, d_rotation, d_scaling, dataset.is_6dof, pipe, bg, opt, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE)
         image, language_feature, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["language_feature_image"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         if viewpoint_cam.alpha_mask is not None:
@@ -155,6 +175,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         iter_end.record()
 
+        if dataset.load2gpu_on_the_fly:
+            viewpoint_cam.load2device('cpu')
+
         with torch.no_grad():
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
@@ -167,10 +190,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.close()
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, opt, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset)
+            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), 
+							testing_iterations, scene, render, (pipe, background, opt, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset, deform,
+							dataset.load2gpu_on_the_fly)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
+                #deform.save_weights(args.model_path, iteration)
 
             # Densification
             if not opt.include_feature:
@@ -196,11 +222,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     gaussians.optimizer.zero_grad(set_to_none = True)
                 else:
                     gaussians.optimizer.step()
+                    deform.optimizer.step()
                     gaussians.optimizer.zero_grad(set_to_none = True)
+                    deform.optimizer.zero_grad()
+					
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(opt.include_feature), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+                deform.save_weights(args.model_path, iteration)
 
 def prepare_output_and_logger(args):    
     if not args.model_path:
@@ -224,7 +254,8 @@ def prepare_output_and_logger(args):
         print("Tensorboard not available: not logging progress")
     return tb_writer
 
-def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, dataset):
+def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, 
+					renderArgs, dataset, deform, load2gpu_on_the_fly):
     opt = renderArgs[2]
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
@@ -242,17 +273,25 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 l1_test = 0.0
                 psnr_test = 0.0
                 for idx, viewpoint in enumerate(config['cameras']):
+                    if load2gpu_on_the_fly:
+                        viewpoint.load2device()
+                    fid = viewpoint.fid
+                    xyz = scene.gaussians.get_xyz
+                    time_input = fid.unsqueeze(0).expand(xyz.shape[0], -1)
+                    d_xyz, d_rotation, d_scaling = deform.step(xyz.detach(), time_input)
                     if not opt.include_feature:
-                        image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
+                        image = torch.clamp(renderFunc(viewpoint, scene.gaussians, d_xyz, d_rotation, d_scaling, dataset.is_6dof, *renderArgs)["render"], 0.0, 1.0)
                         gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                         if dataset.train_test_exp:
                             image = image[..., image.shape[-1] // 2:]
                             gt_image = gt_image[..., gt_image.shape[-1] // 2:]
                     else:
-                        image = torch.clamp((renderFunc(viewpoint, scene.gaussians, *renderArgs)["language_feature_image"]+1)/2, 0.0, 1.0)
+                        image = torch.clamp((renderFunc(viewpoint, scene.gaussians, d_xyz, d_rotation, d_scaling, dataset.is_6dof, *renderArgs)["language_feature_image"]+1)/2, 0.0, 1.0)
                         gt_image, mask = viewpoint.get_language_feature(language_feature_dir=dataset.lf_path, feature_level=dataset.feature_level)
                         gt_image = torch.clamp((gt_image.to("cuda")+1)/2, 0.0, 1.0)
 
+                    if load2gpu_on_the_fly:
+                        viewpoint.load2device('cpu')
                     if tb_writer and (idx < 5):
                         tb_writer.add_images(config['name'] + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
                         if iteration == testing_iterations[0]:
@@ -281,7 +320,8 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, 
+						default=[7_000, 30_000] + list(range(10000, 40001, 1000)))
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument('--disable_viewer', action='store_true', default=False)
