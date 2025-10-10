@@ -495,10 +495,13 @@ def readNerfiesCameras(path):
 
         FovY = focal2fov(focal, image.size[1])
         FovX = focal2fov(focal, image.size[0])
-        cam_info = CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
-                              image_path=image_path, image_name=image_name, width=image.size[
-                                  0], height=image.size[1],
-                              fid=fid)
+        # cam_info = CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
+        #                       image_path=image_path, image_name=image_name, width=image.size[
+        #                           0], height=image.size[1],
+        #                       fid=fid)
+        cam_info = CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, depth_params=None,
+                        image_path=image_path, image_name=image_name, depth_path=None,
+                        width=image.size[0], height=image.size[1], is_test=None, fid=fid)
         cam_infos.append(cam_info)
 
     sys.stdout.write('\n')
