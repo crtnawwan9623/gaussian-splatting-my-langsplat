@@ -137,7 +137,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, depths_params, images_fold
         image_name = extr.name
         depth_path = os.path.join(depths_folder, f"{extr.name[:-n_remove]}.png") if depths_folder != "" else ""
 
-		fid = int(image_name) / (num_frames - 1)
+        fid = int(image_name) / (num_frames - 1)
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, depth_params=depth_params,
                               image_path=image_path, image_name=image_name, depth_path=depth_path,
                               width=width, height=height, is_test=image_name in test_cam_names_list, fid=fid)
@@ -500,7 +500,7 @@ def readNerfiesCameras(path):
         #                           0], height=image.size[1],
         #                       fid=fid)
         cam_info = CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, depth_params=None,
-                        image_path=image_path, image_name=image_name, depth_path=None,
+                        image_path=image_path, image_name=image_name, depth_path="",
                         width=image.size[0], height=image.size[1], is_test=None, fid=fid)
         cam_infos.append(cam_info)
 
@@ -538,11 +538,17 @@ def readNerfiesInfo(path, eval):
     except:
         pcd = None
 
+    # scene_info = SceneInfo(point_cloud=pcd,
+    #                        train_cameras=train_cam_infos,
+    #                        test_cameras=test_cam_infos,
+    #                        nerf_normalization=nerf_normalization,
+    #                        ply_path=ply_path)
     scene_info = SceneInfo(point_cloud=pcd,
-                           train_cameras=train_cam_infos,
-                           test_cameras=test_cam_infos,
-                           nerf_normalization=nerf_normalization,
-                           ply_path=ply_path)
+                        train_cameras=train_cam_infos,
+                        test_cameras=test_cam_infos,
+                        nerf_normalization=nerf_normalization,
+                        ply_path=ply_path,
+                        is_nerf_synthetic=False)
     return scene_info
 
 
