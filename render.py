@@ -306,10 +306,10 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
             render_func = interpolate_view_original
         else:
             render_func = interpolate_all
-        if not skip_train:
+        if not skip_train and scene.getTrainCameras():
              #render_set(dataset.model_path, dataset.source_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, dataset.train_test_exp, separate_sh, args, dataset.load2gpu_on_the_fly, dataset.is_6dof, deform)
             render_func(dataset.model_path, dataset.source_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, dataset.train_test_exp, separate_sh, args, dataset.load2gpu_on_the_fly, dataset.is_6dof, deform)
-        if not skip_test:
+        if not skip_test and scene.getTestCameras():
              #render_set(dataset.model_path, dataset.source_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, dataset.train_test_exp, separate_sh, args, dataset.load2gpu_on_the_fly, dataset.is_6dof, deform)
              render_func(dataset.model_path, dataset.source_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, dataset.train_test_exp, separate_sh, args, dataset.load2gpu_on_the_fly, dataset.is_6dof, deform)
 
