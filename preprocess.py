@@ -178,15 +178,19 @@ def _embed_clip_sam_tiles(image, sam_encoder):
     seg_images, seg_map = sam_encoder(aug_imgs)
 
     clip_embeds = {}
-    for mode in ['default', 's', 'm', 'l']:
+    seg_map_out = {}
+    #for mode in ['default', 's', 'm', 'l']:
+    for mode in ['l']:
         tiles = seg_images[mode]
         tiles = tiles.to("cuda")
         with torch.no_grad():
             clip_embed = model.encode_image(tiles)
         clip_embed /= clip_embed.norm(dim=-1, keepdim=True)
         clip_embeds[mode] = clip_embed.detach().cpu().half()
+        seg_map_out[mode] = seg_map[mode]
     
-    return clip_embeds, seg_map
+    #return clip_embeds, seg_map
+    return clip_embeds, seg_map_out
 
 def get_seg_img(mask, image):
     image = image.copy()

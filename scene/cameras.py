@@ -107,21 +107,26 @@ class Camera(nn.Module):
         y = y.reshape(-1, 1)
         seg = seg_map[:, y, x].squeeze(-1).long()
         mask = seg != -1
-        if feature_level == 0: # default
-            point_feature1 = feature_map[seg[0:1]].squeeze(0)
-            mask = mask[0:1].reshape(1, self.image_height, self.image_width)
-        elif feature_level == 1: # s
-            point_feature1 = feature_map[seg[1:2]].squeeze(0)
-            mask = mask[1:2].reshape(1, self.image_height, self.image_width)
-        elif feature_level == 2: # m
-            point_feature1 = feature_map[seg[2:3]].squeeze(0)
-            mask = mask[2:3].reshape(1, self.image_height, self.image_width)
-        elif feature_level == 3: # l
-            point_feature1 = feature_map[seg[3:4]].squeeze(0)
-            mask = mask[3:4].reshape(1, self.image_height, self.image_width)
-        else:
-            raise ValueError("feature_level=", feature_level)
-        # point_feature = torch.cat((point_feature2, point_feature3, point_feature4), dim=-1).to('cuda')
+        # if feature_level == 0: # default
+        #     point_feature1 = feature_map[seg[0:1]].squeeze(0)
+        #     mask = mask[0:1].reshape(1, self.image_height, self.image_width)
+        # elif feature_level == 1: # s
+        #     point_feature1 = feature_map[seg[1:2]].squeeze(0)
+        #     mask = mask[1:2].reshape(1, self.image_height, self.image_width)
+        # elif feature_level == 2: # m
+        #     point_feature1 = feature_map[seg[2:3]].squeeze(0)
+        #     mask = mask[2:3].reshape(1, self.image_height, self.image_width)
+        # elif feature_level == 3: # l
+        #     point_feature1 = feature_map[seg[3:4]].squeeze(0)
+        #     mask = mask[3:4].reshape(1, self.image_height, self.image_width)
+        # else:
+        #     raise ValueError("feature_level=", feature_level)
+        
+        # I use the large model feature only, which is in the first (only) channel of seg_map
+        point_feature1 = feature_map[seg[0:1]].squeeze(0)
+        mask = mask[0:1].reshape(1, self.image_height, self.image_width)
+
+        #point_feature = torch.cat((point_feature2, point_feature3, point_feature4), dim=-1).to('cuda')
         point_feature = point_feature1.reshape(self.image_height, self.image_width, -1).permute(2, 0, 1)
        
         return point_feature.cuda(), mask.cuda()

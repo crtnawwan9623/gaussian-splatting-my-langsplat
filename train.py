@@ -330,7 +330,7 @@ if __name__ == "__main__":
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
     print(args)
-    args.model_path = args.model_path + f"_{str(args.feature_level)}"
+    #args.model_path = args.model_path + f"_{str(args.feature_level)}"
     print("Optimizing " + args.model_path)
 
     # Initialize system state (RNG)
