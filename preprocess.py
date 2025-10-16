@@ -117,7 +117,8 @@ def create(image_list, data_list, save_folder):
     total_lengths = []
     timer = 0
     img_embeds = torch.zeros((len(image_list), 300, embed_size))
-    seg_maps = torch.zeros((len(image_list), 4, *image_list[0].shape[1:])) 
+    #seg_maps = torch.zeros((len(image_list), 4, *image_list[0].shape[1:])) 
+    seg_maps = torch.zeros((len(image_list), 1, *image_list[0].shape[1:])) 
     mask_generator.predictor.model.to('cuda')
 
     for i, img in tqdm(enumerate(image_list), desc="Embedding images", leave=False):
@@ -358,7 +359,8 @@ if __name__ == '__main__':
 
     dataset_path = args.dataset_path
     sam_ckpt_path = args.sam_ckpt_path
-    img_folder = os.path.join(dataset_path, 'images')
+    #img_folder = os.path.join(dataset_path, 'images')
+    img_folder = os.path.join(dataset_path, 'rgb/2x')
     data_list = os.listdir(img_folder)
     data_list.sort()
 

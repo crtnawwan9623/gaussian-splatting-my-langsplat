@@ -17,17 +17,22 @@ class DeformModel:
         return self.deform(xyz, time_emb)
 
     def train_setting(self, training_args):
-        l = [
-            {'params': list(self.deform.parameters()),
-             'lr': training_args.position_lr_init * self.spatial_lr_scale,
-             "name": "deform"}
-        ]
-        self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
+        if not training_args.include_feature:
+            l = [
+                {'params': list(self.deform.parameters()),
+                'lr': training_args.position_lr_init * self.spatial_lr_scale,
+                "name": "deform"}
+            ]
+            self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
 
-        self.deform_scheduler_args = get_expon_lr_func(lr_init=training_args.position_lr_init * self.spatial_lr_scale,
-                                                       lr_final=training_args.position_lr_final,
-                                                       lr_delay_mult=training_args.position_lr_delay_mult,
-                                                       max_steps=training_args.deform_lr_max_steps)
+            self.deform_scheduler_args = get_expon_lr_func(lr_init=training_args.position_lr_init * self.spatial_lr_scale,
+                                                        lr_final=training_args.position_lr_final,
+                                                        lr_delay_mult=training_args.position_lr_delay_mult,
+                                                        max_steps=training_args.deform_lr_max_steps)
+        else:
+            for param in self.deform.parameters():
+                param.requires_grad_(False)
+
 
     def save_weights(self, model_path, iteration):
         out_weights_path = os.path.join(model_path, "deform/iteration_{}".format(iteration))

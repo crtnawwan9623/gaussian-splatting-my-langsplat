@@ -440,7 +440,8 @@ def readNerfiesCameras(path):
     scene_center = scene_json['center']
 
     name = path.split('/')[-2]
-    if name.startswith('vrig'):
+    #if name.startswith('vrig'):
+    if name.startswith('vvrig'):
         train_img = dataset_json['train_ids']
         val_img = dataset_json['val_ids']
         all_img = train_img + val_img

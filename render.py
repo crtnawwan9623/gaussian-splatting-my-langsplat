@@ -81,7 +81,11 @@ def interpolate_time(model_path, source_path, name, iteration, views, gaussians,
         time_input = fid.unsqueeze(0).expand(xyz.shape[0], -1)
         d_xyz, d_rotation, d_scaling = deform.step(xyz.detach(), time_input)
         results = render(view, gaussians, d_xyz, d_rotation, d_scaling, is_6dof, pipeline, background, args, use_trained_exp=train_test_exp, separate_sh=separate_sh)
-        rendering = results["render"]
+        if not args.include_feature:
+            rendering = results["render"]
+        else:
+            rendering = results["language_feature_image"]
+            rendering = torch.clamp((rendering+1)/2, 0.0, 1.0)
         renderings.append(to8b(rendering.cpu().numpy()))
         depth = results["depth"]
         depth = depth / (depth.max() + 1e-5)
@@ -285,7 +289,7 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
         gaussians = GaussianModel(dataset.sh_degree)
         #scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
         scene = Scene(dataset, gaussians, shuffle=False)
-        checkpoint = os.path.join(args.model_path, 'chkpnt30000.pth')
+        checkpoint = os.path.join(args.model_path, 'chkpnt40000.pth')
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, args, mode='test')
         deform = DeformModel(dataset.is_blender, dataset.is_6dof)
