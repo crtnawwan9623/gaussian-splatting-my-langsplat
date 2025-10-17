@@ -20,7 +20,7 @@ try:
     import open_clip
 except ImportError:
     assert False, "open_clip is not installed, install it with `pip install open-clip-torch`"
-
+import shutil
 
 @dataclass
 class OpenCLIPNetworkConfig:
@@ -29,7 +29,7 @@ class OpenCLIPNetworkConfig:
     clip_model_pretrained: str = "laion2b_s34b_b88k"
     clip_n_dims: int = 512
     negatives: Tuple[str] = ("object", "things", "stuff", "texture")
-    positives: Tuple[str] = ("",)
+    positives: Tuple[str] = ("hand","toy", "desk")
 
 class OpenCLIPNetwork(nn.Module):
     def __init__(self, config: OpenCLIPNetworkConfig):
@@ -101,6 +101,25 @@ class OpenCLIPNetwork(nn.Module):
         softmax = torch.softmax(10 * sims, dim=-1)  # rays x n-phrase x 2
         best_id = softmax[..., 0].argmin(dim=1)  # rays x 2
         return torch.gather(softmax, 1, best_id[..., None, None].expand(best_id.shape[0], len(self.negatives), 2))[:, 0, :]
+    
+    #method to get most relevant positive id. The probability (after softmax) should be more than 0.7. if not, return -1
+    def get_most_relevant_positive_id(self, embed: torch.Tensor, prob_threshold=0.6) -> int:
+        assert embed.shape[1] == self.clip_n_dims, f"Embedding dimensionality must match the model dimensionality {embed.shape[1]} vs {self.clip_n_dims}"
+        phrases_embeds_neg = self.neg_embeds # n_neg(4) x 512
+        phrases_embeds_neg.to(embed.dtype)
+        output_neg = torch.mm(embed, phrases_embeds_neg.T)  # rays x 4
+        output_neg_max, _ = output_neg.max(dim=1) # rays
+        phrases_embeds_pos = self.pos_embeds # n_pos(3) x 512
+        phrases_embeds_pos.to(embed.dtype)
+        output_pos = torch.mm(embed, phrases_embeds_pos.T)  # rays x 3
+        output_pos_max, positive_id = output_pos.max(dim=1) # rays
+
+        sims = torch.stack((output_pos_max, output_neg_max), dim=-1)  # rays x 2
+        softmax = torch.softmax(10*sims, dim=-1)  # rays x 2
+        pos_prob = softmax[:, 0] # rays
+        filter = pos_prob < prob_threshold
+        positive_id[filter] = -1 # dim is rays
+        return positive_id # return the most relevant positive id for each ray, -1 if no positive is relevant
 
     def encode_image(self, input):
         processed_input = self.process(input).half()
@@ -344,6 +363,25 @@ def seed_everything(seed_value):
         torch.cuda.manual_seed_all(seed_value)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = True
+#method to read img_embeds and convert to object id through get_most_relevant_positive_id
+def create_object_ids(model : OpenCLIPNetwork, data_list, save_folder, save_folder_obj_id):
+    assert model is not None, "model must be provided to generate object ids"
+    embed_size=512
+    for i, data_name in tqdm(enumerate(data_list), desc="Generating object ids", leave=False):
+        data_path = os.path.join(save_folder, data_name.split('.')[0])
+        image_embed = np.load(data_path + '_f.npy') # k x 512 (k is the number of masks of large level)
+        image_embed = torch.from_numpy(image_embed).to("cuda") # k x 512
+        object_ids = model.get_most_relevant_positive_id(image_embed, prob_threshold=0.6) # k
+        object_ids.unsqueeze_(1) # k x 1
+        save_path = os.path.join(save_folder_obj_id, data_name.split('.')[0])
+        save_path_f = save_path + '_f.npy'
+        np.save(save_path_f, object_ids.cpu().numpy())
+        # also copy _s.npy to the new folder
+        src_path_s = data_path + '_s.npy'
+        dst_path_s = save_path + '_s.npy'
+        shutil.copy(src_path_s, dst_path_s)
+        
+
 
 
 if __name__ == '__main__':
@@ -365,46 +403,51 @@ if __name__ == '__main__':
     data_list.sort()
 
     model = OpenCLIPNetwork(OpenCLIPNetworkConfig)
-    sam = sam_model_registry["vit_h"](checkpoint=sam_ckpt_path).to('cuda')
-    mask_generator = SamAutomaticMaskGenerator(
-        model=sam,
-        points_per_side=32,
-        pred_iou_thresh=0.7,
-        box_nms_thresh=0.7,
-        stability_score_thresh=0.85,
-        crop_n_layers=1,
-        crop_n_points_downscale_factor=1,
-        min_mask_region_area=100,
-    )
+    # execute the following only if the folder os.path.join(dataset_path, 'language_features') does not exist
+    if not os.path.exists(os.path.join(dataset_path, 'language_features')):
+        sam = sam_model_registry["vit_h"](checkpoint=sam_ckpt_path).to('cuda')
+        mask_generator = SamAutomaticMaskGenerator(
+            model=sam,
+            points_per_side=32,
+            pred_iou_thresh=0.7,
+            box_nms_thresh=0.7,
+            stability_score_thresh=0.85,
+            crop_n_layers=1,
+            crop_n_points_downscale_factor=1,
+            min_mask_region_area=100,
+        )
 
-    img_list = []
-    WARNED = False
-    for data_path in data_list:
-        image_path = os.path.join(img_folder, data_path)
-        image = cv2.imread(image_path)
+        img_list = []
+        WARNED = False
+        for data_path in data_list:
+            image_path = os.path.join(img_folder, data_path)
+            image = cv2.imread(image_path)
 
-        orig_w, orig_h = image.shape[1], image.shape[0]
-        if args.resolution == -1:
-            if orig_h > 1080:
-                if not WARNED:
-                    print("[ INFO ] Encountered quite large input images (>1080P), rescaling to 1080P.\n "
-                        "If this is not desired, please explicitly specify '--resolution/-r' as 1")
-                    WARNED = True
-                global_down = orig_h / 1080
+            orig_w, orig_h = image.shape[1], image.shape[0]
+            if args.resolution == -1:
+                if orig_h > 1080:
+                    if not WARNED:
+                        print("[ INFO ] Encountered quite large input images (>1080P), rescaling to 1080P.\n "
+                            "If this is not desired, please explicitly specify '--resolution/-r' as 1")
+                        WARNED = True
+                    global_down = orig_h / 1080
+                else:
+                    global_down = 1
             else:
-                global_down = 1
-        else:
-            global_down = orig_w / args.resolution
+                global_down = orig_w / args.resolution
+                
+            scale = float(global_down)
+            resolution = (int( orig_w  / scale), int(orig_h / scale))
             
-        scale = float(global_down)
-        resolution = (int( orig_w  / scale), int(orig_h / scale))
-        
-        image = cv2.resize(image, resolution)
-        image = torch.from_numpy(image)
-        img_list.append(image)
-    images = [img_list[i].permute(2, 0, 1)[None, ...] for i in range(len(img_list))]
-    imgs = torch.cat(images)
+            image = cv2.resize(image, resolution)
+            image = torch.from_numpy(image)
+            img_list.append(image)
+        images = [img_list[i].permute(2, 0, 1)[None, ...] for i in range(len(img_list))]
+        imgs = torch.cat(images)
 
-    save_folder = os.path.join(dataset_path, 'language_features')
-    os.makedirs(save_folder, exist_ok=True)
-    create(imgs, data_list, save_folder)
+        save_folder = os.path.join(dataset_path, 'language_features')
+        os.makedirs(save_folder, exist_ok=True)
+        create(imgs, data_list, save_folder)
+
+    save_folder_ObjId = os.path.join(dataset_path, 'language_features_obj_id')
+    create_object_ids(model, data_list, save_folder, save_folder_ObjId)
