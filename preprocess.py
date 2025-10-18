@@ -29,7 +29,7 @@ class OpenCLIPNetworkConfig:
     clip_model_pretrained: str = "laion2b_s34b_b88k"
     clip_n_dims: int = 512
     negatives: Tuple[str] = ("object", "things", "stuff", "texture")
-    positives: Tuple[str] = ("hand","toy", "desk")
+    positives: Tuple[str] = ("hand","toy", "desk") # index is -1 if no relevant object
 
 class OpenCLIPNetwork(nn.Module):
     def __init__(self, config: OpenCLIPNetworkConfig):
@@ -119,7 +119,7 @@ class OpenCLIPNetwork(nn.Module):
         pos_prob = softmax[:, 0] # rays
         filter = pos_prob < prob_threshold
         positive_id[filter] = -1 # dim is rays
-        return positive_id # return the most relevant positive id for each ray, -1 if no positive is relevant
+        return positive_id # return the most relevant positive id for each ray (i.e., object label for each ray), -1 if no positive is relevant
 
     def encode_image(self, input):
         processed_input = self.process(input).half()
@@ -403,6 +403,7 @@ if __name__ == '__main__':
     data_list.sort()
 
     model = OpenCLIPNetwork(OpenCLIPNetworkConfig)
+    save_folder = os.path.join(dataset_path, 'language_features')
     # execute the following only if the folder os.path.join(dataset_path, 'language_features') does not exist
     if not os.path.exists(os.path.join(dataset_path, 'language_features')):
         sam = sam_model_registry["vit_h"](checkpoint=sam_ckpt_path).to('cuda')
@@ -445,7 +446,7 @@ if __name__ == '__main__':
         images = [img_list[i].permute(2, 0, 1)[None, ...] for i in range(len(img_list))]
         imgs = torch.cat(images)
 
-        save_folder = os.path.join(dataset_path, 'language_features')
+        #save_folder = os.path.join(dataset_path, 'language_features')
         os.makedirs(save_folder, exist_ok=True)
         create(imgs, data_list, save_folder)
 
