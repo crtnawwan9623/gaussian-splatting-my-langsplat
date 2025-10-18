@@ -29,7 +29,8 @@ class OpenCLIPNetworkConfig:
     clip_model_pretrained: str = "laion2b_s34b_b88k"
     clip_n_dims: int = 512
     negatives: Tuple[str] = ("object", "things", "stuff", "texture")
-    positives: Tuple[str] = ("hand","toy", "desk") # index is -1 if no relevant object
+    positives: Tuple[str] = ("man's hand","red egg","yellow chicken") # index is -1 if no relevant object
+    #positives: Tuple[str] = ("stuffed bear","sheep", "coffee mug", "plate", "bag of cookies") # index is -1 if no relevant object
 
 class OpenCLIPNetwork(nn.Module):
     def __init__(self, config: OpenCLIPNetworkConfig):
@@ -106,11 +107,11 @@ class OpenCLIPNetwork(nn.Module):
     def get_most_relevant_positive_id(self, embed: torch.Tensor, prob_threshold=0.6) -> int:
         assert embed.shape[1] == self.clip_n_dims, f"Embedding dimensionality must match the model dimensionality {embed.shape[1]} vs {self.clip_n_dims}"
         phrases_embeds_neg = self.neg_embeds # n_neg(4) x 512
-        phrases_embeds_neg.to(embed.dtype)
+        phrases_embeds_neg = phrases_embeds_neg.to(embed.dtype)
         output_neg = torch.mm(embed, phrases_embeds_neg.T)  # rays x 4
         output_neg_max, _ = output_neg.max(dim=1) # rays
         phrases_embeds_pos = self.pos_embeds # n_pos(3) x 512
-        phrases_embeds_pos.to(embed.dtype)
+        phrases_embeds_pos = phrases_embeds_pos.to(embed.dtype)
         output_pos = torch.mm(embed, phrases_embeds_pos.T)  # rays x 3
         output_pos_max, positive_id = output_pos.max(dim=1) # rays
 
@@ -449,6 +450,7 @@ if __name__ == '__main__':
         #save_folder = os.path.join(dataset_path, 'language_features')
         os.makedirs(save_folder, exist_ok=True)
         create(imgs, data_list, save_folder)
-
-    save_folder_ObjId = os.path.join(dataset_path, 'language_features_obj_id')
-    create_object_ids(model, data_list, save_folder, save_folder_ObjId)
+    
+    save_folder_obj_id = os.path.join(dataset_path, 'language_features_obj_id')
+    os.makedirs(save_folder_obj_id, exist_ok=True)
+    create_object_ids(model, data_list, save_folder, save_folder_obj_id)
