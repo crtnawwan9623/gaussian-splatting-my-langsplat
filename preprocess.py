@@ -381,6 +381,21 @@ def create_object_ids(model : OpenCLIPNetwork, data_list, save_folder, save_fold
         src_path_s = data_path + '_s.npy'
         dst_path_s = save_path + '_s.npy'
         shutil.copy(src_path_s, dst_path_s)
+
+        # gather the objects_ids for index value in seg map
+        seg_map = np.load(data_path + '_s.npy') # 1 x H x W (only large level)
+        h, w = seg_map.shape[1], seg_map.shape[2]
+        seg_map_flat = seg_map.reshape(-1) # N=H*W
+        mask = seg_map_flat != -1 #N. group seg map (index value) to global 0-1 mask
+        # object_id = 0 can mean the object is not relevant positive or is background
+        object_id_map = object_ids[seg_map_flat] # N x 1. Object_id for a mask could be -1 (from get_most_relevant_positive_id) if pos_prob < threshold (object of the mask is not relevant positive)
+        object_id_map[~mask] = -1 #background has to masks (index value -1 in seg_map), also set their object_id to -1
+        object_id_map = object_id_map + 1 # to make sure background is 0
+        object_id_map = object_id_map.reshape(1, h, w) # 1 x H x W
+        test_save_folder = os.path.join(save_folder_obj_id, 'test_object_id_maps')
+        os.makedirs(test_save_folder, exist_ok=True)
+        test_save_path = os.path.join(test_save_folder, data_name.split('.')[0] + '_obj_id.npy')
+        np.save(test_save_path, object_id_map.cpu().numpy())
         
 
 
@@ -398,8 +413,8 @@ if __name__ == '__main__':
 
     dataset_path = args.dataset_path
     sam_ckpt_path = args.sam_ckpt_path
-    #img_folder = os.path.join(dataset_path, 'images')
-    img_folder = os.path.join(dataset_path, 'rgb/2x')
+    img_folder = os.path.join(dataset_path, 'images')
+    #img_folder = os.path.join(dataset_path, 'rgb/2x')
     data_list = os.listdir(img_folder)
     data_list.sort()
 
