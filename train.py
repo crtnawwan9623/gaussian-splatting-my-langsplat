@@ -15,7 +15,7 @@ from random import randint
 from utils.loss_utils import l1_loss, ssim
 from gaussian_renderer import render, network_gui
 import sys
-from scene import Scene, GaussianModel, DeformModel
+from scene import Scene, GaussianModel, DeformModel, MlpModel
 from utils.general_utils import safe_state, get_expon_lr_func, get_linear_noise_func
 import uuid
 from tqdm import tqdm
@@ -52,6 +52,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     deform.train_setting(opt)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
+    if opt.include_feature:
+        mlp_model = MlpModel()
+        mlp_model.train_setting(opt)
 
     if opt.include_feature:
         if not checkpoint:
@@ -62,6 +65,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             first_iter = 0
         gaussians.restore(model_params, opt)
         deform.load_weights(dataset.model_path)
+        if opt.include_feature:
+            mlp_model.load_weights(dataset.model_path)
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
@@ -102,6 +107,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         gaussians.update_learning_rate(iteration)
         if not opt.include_feature:
             deform.update_learning_rate(iteration)
+        if opt.include_feature:
+            mlp_model.update_learning_rate(iteration)
 
         # Every 1000 its we increase the levels of SH up to a maximum degree
         if iteration % 1000 == 0:
@@ -147,7 +154,20 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # Loss
         if opt.include_feature:
             gt_language_feature, language_feature_mask = viewpoint_cam.get_language_feature(language_feature_dir=dataset.lf_path, feature_level=dataset.feature_level)
-            Ll1 = l1_loss(language_feature*language_feature_mask, gt_language_feature*language_feature_mask)            
+            #Ll1 = l1_loss(language_feature*language_feature_mask, gt_language_feature*language_feature_mask)
+            #reshape langauge_feautre from [3,H,W] to [N,3]
+            N = language_feature.shape[1] * language_feature.shape[2]
+            language_feature_reshaped = language_feature.permute(1, 2, 0).reshape(N, 3)
+            obj_id_distribution = mlp_model.step(language_feature_reshaped) # [N,3] -> [N,3] (the 1st 3 is latent embeedding, the 2nd 3 is number of objects )
+            obj_id = gt_language_feature # [1, H, W]
+            obj_mask = language_feature_mask # [1, H, W]
+            #calculate cross entropy loss of obj_id_distribution and obj_id, considering obj_mask
+            obj_id = obj_id.permute(1, 2, 0).reshape(N).long()  # [N]
+            obj_mask = obj_mask.permute(1, 2, 0).reshape(N)  # [N]
+            criterion = torch.nn.CrossEntropyLoss(reduction='none')
+            ce_loss = criterion(obj_id_distribution, obj_id)  # [N]
+            ce_loss = (ce_loss * obj_mask).sum() / (obj_mask.sum() + 1e-8)
+            Ll1 = ce_loss
             loss = Ll1
         else:
             gt_image = viewpoint_cam.original_image.cuda()
