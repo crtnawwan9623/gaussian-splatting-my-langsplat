@@ -29,8 +29,9 @@ class OpenCLIPNetworkConfig:
     clip_model_pretrained: str = "laion2b_s34b_b88k"
     clip_n_dims: int = 512
     negatives: Tuple[str] = ("object", "things", "stuff", "texture")
-    positives: Tuple[str] = ("man's hand","red egg","yellow chicken") # index is -1 if no relevant object
+    #positives: Tuple[str] = ("man's hand","red egg","yellow chicken") # index is -1 if no relevant object
     #positives: Tuple[str] = ("stuffed bear","sheep", "coffee mug", "plate", "bag of cookies") # index is -1 if no relevant object
+    positives: Tuple[str] = ("white SUV car with red stripes","green SUV car","yellow duck with black stripes") # index is -1 if no relevant object
 
 class OpenCLIPNetwork(nn.Module):
     def __init__(self, config: OpenCLIPNetworkConfig):
@@ -389,7 +390,7 @@ def create_object_ids(model : OpenCLIPNetwork, data_list, save_folder, save_fold
         data_path = os.path.join(save_folder, data_name.split('.')[0])
         image_embed = np.load(data_path + '_f.npy') # k x 512 (k is the number of masks of large level)
         image_embed = torch.from_numpy(image_embed).to("cuda") # k x 512
-        object_ids = model.get_most_relevant_positive_id(image_embed, prob_threshold=0.6) # k
+        object_ids = model.get_most_relevant_positive_id(image_embed, prob_threshold=0.5) # k
         object_ids.unsqueeze_(1) # k x 1
         save_path = os.path.join(save_folder_obj_id, data_name.split('.')[0])
         save_path_f = save_path + '_f.npy'
@@ -412,7 +413,7 @@ def create_object_ids(model : OpenCLIPNetwork, data_list, save_folder, save_fold
         test_save_folder = os.path.join(save_folder_obj_id, 'test_object_id_maps')
         os.makedirs(test_save_folder, exist_ok=True)
         test_save_path = os.path.join(test_save_folder, data_name.split('.')[0] + '_obj_id.npy')
-        np.save(test_save_path, object_id_map.cpu().numpy())
+        np.save(test_save_path, object_id_map.cpu().numpy().astype(np.int32))
         
 
 
