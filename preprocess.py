@@ -120,6 +120,23 @@ class OpenCLIPNetwork(nn.Module):
         pos_prob = softmax[:, 0] # rays
         filter = pos_prob < prob_threshold
         positive_id[filter] = -1 # dim is rays
+
+        #enable below to only keep one ray per object
+        #For rays with same positive_id, only keep the one with highest pos_prob, set others to -1
+        unique_ids = positive_id.unique() # Uniques
+        #broadcast positive_id and pos_prob to Uniques x rays
+        positive_id_broadcast = positive_id.unsqueeze(0).repeat(len(unique_ids), 1) # Uniques x rays
+        pos_prob_broadcast = pos_prob.unsqueeze(0).repeat(len(unique_ids), 1) # Uniques x rays
+        # Create a mask for each unique ID from each row of positive_id_broadcast
+        mask = positive_id_broadcast == unique_ids.unsqueeze(1) # Uniques x rays
+        # For each unique ID, find the ray with the highest pos_prob
+        masked_pos_prob = pos_prob_broadcast * mask.float() # Uniques x rays
+        #argmax to find the index of the ray with highest pos_prob for each unique ID
+        max_indices = masked_pos_prob.argmax(dim=1) # Uniques
+        keep_mask = torch.zeros_like(positive_id, dtype=torch.bool) # rays
+        keep_mask[max_indices] = True
+        positive_id[~keep_mask] = -1
+
         return positive_id # return the most relevant positive id for each ray (i.e., object label for each ray), -1 if no positive is relevant
 
     def encode_image(self, input):
