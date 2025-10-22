@@ -163,7 +163,20 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             obj_mask = language_feature_mask # [1, H, W]
             #calculate cross entropy loss of obj_id_distribution and obj_id, considering obj_mask
             obj_id = obj_id.permute(1, 2, 0).reshape(N).long()  # [N]
+
+            #first mask to ignore background. 
+            # obj_mask=language_feature_mask is grouped mask (0/1) for all masks in the image. 
+            # So background points don't belong to any mask, hence have seg map index -1. 
+            # Hence obj_mask=0 for background points (calculated in get_language_feature)
             obj_mask = obj_mask.permute(1, 2, 0).reshape(N)  # [N]
+
+            #second mask to ignore non-relevant objects in foreground
+            # object id -1 (non-relevant objects)
+            valid_mask = obj_id != -1  # [N]
+
+            #combine two masks
+            obj_mask = obj_mask * valid_mask  # [N]
+
             criterion = torch.nn.CrossEntropyLoss(reduction='none')
             ce_loss = criterion(obj_id_distribution, obj_id)  # [N]
             ce_loss = (ce_loss * obj_mask).sum() / (obj_mask.sum() + 1e-8)

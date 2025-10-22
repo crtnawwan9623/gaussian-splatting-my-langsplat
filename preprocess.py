@@ -389,7 +389,7 @@ def create_object_ids(model : OpenCLIPNetwork, data_list, save_folder, save_fold
         mask = seg_map_flat != -1 #N. group seg map (index value) to global 0-1 mask
         # object_id = 0 can mean the object is not relevant positive or is background
         object_id_map = object_ids[seg_map_flat] # N x 1. Object_id for a mask could be -1 (from get_most_relevant_positive_id) if pos_prob < threshold (object of the mask is not relevant positive)
-        object_id_map[~mask] = -1 #background has to masks (index value -1 in seg_map), also set their object_id to -1
+        object_id_map[~mask] = -1 #background has no masks (index value -1 in seg_map), also set their object_id to -1
         object_id_map = object_id_map + 1 # to make sure background is 0
         object_id_map = object_id_map.reshape(1, h, w) # 1 x H x W
         test_save_folder = os.path.join(save_folder_obj_id, 'test_object_id_maps')
