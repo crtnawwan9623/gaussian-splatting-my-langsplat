@@ -31,7 +31,7 @@ class OpenCLIPNetworkConfig:
     negatives: Tuple[str] = ("object", "things", "stuff", "texture")
     #positives: Tuple[str] = ("man's hand","red egg","yellow chicken") # index is -1 if no relevant object
     #positives: Tuple[str] = ("stuffed bear","sheep", "coffee mug", "plate", "bag of cookies") # index is -1 if no relevant object
-    positives: Tuple[str] = ("white SUV car with red stripes","green SUV car","yellow duck with black stripes") # index is -1 if no relevant object
+    positives: Tuple[str] = ("white SUV car with stripes","green SUV car","yellow sedan car with stripes") # index is -1 if no relevant object
 
 class OpenCLIPNetwork(nn.Module):
     def __init__(self, config: OpenCLIPNetworkConfig):
@@ -105,7 +105,7 @@ class OpenCLIPNetwork(nn.Module):
         return torch.gather(softmax, 1, best_id[..., None, None].expand(best_id.shape[0], len(self.negatives), 2))[:, 0, :]
     
     #method to get most relevant positive id. The probability (after softmax) should be more than 0.7. if not, return -1
-    def get_most_relevant_positive_id(self, embed: torch.Tensor, prob_threshold=0.6) -> int:
+    def get_most_relevant_positive_id(self, embed: torch.Tensor, prob_threshold=0.5) -> int:
         assert embed.shape[1] == self.clip_n_dims, f"Embedding dimensionality must match the model dimensionality {embed.shape[1]} vs {self.clip_n_dims}"
         phrases_embeds_neg = self.neg_embeds # n_neg(4) x 512
         phrases_embeds_neg = phrases_embeds_neg.to(embed.dtype)
@@ -122,21 +122,21 @@ class OpenCLIPNetwork(nn.Module):
         filter = pos_prob < prob_threshold
         positive_id[filter] = -1 # dim is rays
 
-        #enable below to only keep one ray per object
-        #For rays with same positive_id, only keep the one with highest pos_prob, set others to -1
-        unique_ids = positive_id.unique() # Uniques
-        #broadcast positive_id and pos_prob to Uniques x rays
-        positive_id_broadcast = positive_id.unsqueeze(0).repeat(len(unique_ids), 1) # Uniques x rays
-        pos_prob_broadcast = pos_prob.unsqueeze(0).repeat(len(unique_ids), 1) # Uniques x rays
-        # Create a mask for each unique ID from each row of positive_id_broadcast
-        mask = positive_id_broadcast == unique_ids.unsqueeze(1) # Uniques x rays
-        # For each unique ID, find the ray with the highest pos_prob
-        masked_pos_prob = pos_prob_broadcast * mask.float() # Uniques x rays
-        #argmax to find the index of the ray with highest pos_prob for each unique ID
-        max_indices = masked_pos_prob.argmax(dim=1) # Uniques
-        keep_mask = torch.zeros_like(positive_id, dtype=torch.bool) # rays
-        keep_mask[max_indices] = True
-        positive_id[~keep_mask] = -1
+        # #enable below to only keep one ray per object
+        # #For rays with same positive_id, only keep the one with highest pos_prob, set others to -1
+        # unique_ids = positive_id.unique() # Uniques
+        # #broadcast positive_id and pos_prob to Uniques x rays
+        # positive_id_broadcast = positive_id.unsqueeze(0).repeat(len(unique_ids), 1) # Uniques x rays
+        # pos_prob_broadcast = pos_prob.unsqueeze(0).repeat(len(unique_ids), 1) # Uniques x rays
+        # # Create a mask for each unique ID from each row of positive_id_broadcast
+        # mask = positive_id_broadcast == unique_ids.unsqueeze(1) # Uniques x rays
+        # # For each unique ID, find the ray with the highest pos_prob
+        # masked_pos_prob = pos_prob_broadcast * mask.float() # Uniques x rays
+        # #argmax to find the index of the ray with highest pos_prob for each unique ID
+        # max_indices = masked_pos_prob.argmax(dim=1) # Uniques
+        # keep_mask = torch.zeros_like(positive_id, dtype=torch.bool) # rays
+        # keep_mask[max_indices] = True
+        # positive_id[~keep_mask] = -1
 
         return positive_id # return the most relevant positive id for each ray (i.e., object label for each ray), -1 if no positive is relevant
 

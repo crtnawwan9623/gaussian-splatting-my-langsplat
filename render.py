@@ -10,7 +10,7 @@
 #
 
 import torch
-from scene import Scene, DeformModel
+from scene import Scene, DeformModel, MlpModel
 import os
 from tqdm import tqdm
 from os import makedirs
@@ -30,7 +30,7 @@ except:
     SPARSE_ADAM_AVAILABLE = False
 
 
-def render_set(model_path, source_path, name, iteration, views, gaussians, pipeline, background, train_test_exp, separate_sh, args, load2gpu_on_the_fly, is_6dof, deform):
+def render_set(model_path, source_path, name, iteration, views, gaussians, pipeline, background, train_test_exp, separate_sh, args, load2gpu_on_the_fly, is_6dof, deform, mlp_model):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
 
@@ -49,7 +49,7 @@ def render_set(model_path, source_path, name, iteration, views, gaussians, pipel
         if not args.include_feature:
             rendering = output["render"]
         else:
-            rendering = output["language_feature_image"]
+            rendering = output["language_feature_image"]  #[3,H,W]
 
         if not args.include_feature:
             gt = view.original_image[0:3, :, :]
@@ -58,6 +58,16 @@ def render_set(model_path, source_path, name, iteration, views, gaussians, pipel
                 gt = gt[..., gt.shape[-1] // 2:]
         else:
             gt, mask = view.get_language_feature(os.path.join(source_path, args.language_features_name), feature_level=args.feature_level)
+
+        if args.include_feature
+            language_feature_reshaped = rendering.permute(1, 2, 0).reshape(N, 3) # [N,3]
+            obj_id_distribution = mlp_model.step(language_feature_reshaped) # [N,3] -> [N,3] (the 1st 3 is latent embeedding, the 2nd 3 is number of objects )
+            obj_id_prob, obj_id= obj_id_distribution.max(dim=1) #[N,3] -> [N]
+            obj_mask = mask.permute(1, 2, 0).reshape(N)  # [N], mask to remove background point (i.e., no mask point)
+            #valid_mask = obj_id_prob > 0.5 # threshold to remove irrrelevant postive id
+            obj_id *= obj_mask 
+
+
 
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
@@ -294,6 +304,8 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
         gaussians.restore(model_params, args, mode='test')
         deform = DeformModel(dataset.is_blender, dataset.is_6dof)
         deform.load_weights(dataset.model_path)
+        mlp_model = MlpModel()
+        mlp_model.load_weights(dataset.model_path)
 
         bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
@@ -312,10 +324,10 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
             render_func = interpolate_all
         if not skip_train and scene.getTrainCameras():
              #render_set(dataset.model_path, dataset.source_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, dataset.train_test_exp, separate_sh, args, dataset.load2gpu_on_the_fly, dataset.is_6dof, deform)
-            render_func(dataset.model_path, dataset.source_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, dataset.train_test_exp, separate_sh, args, dataset.load2gpu_on_the_fly, dataset.is_6dof, deform)
+            render_func(dataset.model_path, dataset.source_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, dataset.train_test_exp, separate_sh, args, dataset.load2gpu_on_the_fly, dataset.is_6dof, deform, mlp_model)
         if not skip_test and scene.getTestCameras():
              #render_set(dataset.model_path, dataset.source_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, dataset.train_test_exp, separate_sh, args, dataset.load2gpu_on_the_fly, dataset.is_6dof, deform)
-             render_func(dataset.model_path, dataset.source_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, dataset.train_test_exp, separate_sh, args, dataset.load2gpu_on_the_fly, dataset.is_6dof, deform)
+             render_func(dataset.model_path, dataset.source_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, dataset.train_test_exp, separate_sh, args, dataset.load2gpu_on_the_fly, dataset.is_6dof, deform, mlp_model)
 
 if __name__ == "__main__":
     # Set up command line argument parser

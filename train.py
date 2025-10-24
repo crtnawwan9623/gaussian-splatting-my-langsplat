@@ -261,6 +261,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     if not opt.include_feature:
                         deform.optimizer.step()
                         deform.optimizer.zero_grad()
+                    if opt.include_feature:
+                        mlp_model.optimizer.step()
+                        mlp_model.optimizer.zero_grad()
 					
 
             if (iteration in checkpoint_iterations):
