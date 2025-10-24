@@ -120,7 +120,8 @@ class OpenCLIPNetwork(nn.Module):
         softmax = torch.softmax(10*sims, dim=-1)  # rays x 2
         pos_prob = softmax[:, 0] # rays
         filter = pos_prob < prob_threshold
-        positive_id[filter] = -1 # dim is rays
+        #positive_id[filter] = -1 # dim is rays
+        positive_id[filter] = len(self.positives)  # set to len(positives) to indicate no relevant object
 
         # #enable below to only keep one ray per object
         # #For rays with same positive_id, only keep the one with highest pos_prob, set others to -1
@@ -390,7 +391,7 @@ def create_object_ids(model : OpenCLIPNetwork, data_list, save_folder, save_fold
         data_path = os.path.join(save_folder, data_name.split('.')[0])
         image_embed = np.load(data_path + '_f.npy') # k x 512 (k is the number of masks of large level)
         image_embed = torch.from_numpy(image_embed).to("cuda") # k x 512
-        object_ids = model.get_most_relevant_positive_id(image_embed, prob_threshold=0.5) # k
+        object_ids = model.get_most_relevant_positive_id(image_embed, prob_threshold=0.5) # k, possible values are 0,1,2,3 (len(positives)=3 means no relevant object)
         object_ids.unsqueeze_(1) # k x 1
         save_path = os.path.join(save_folder_obj_id, data_name.split('.')[0])
         save_path_f = save_path + '_f.npy'
@@ -406,9 +407,9 @@ def create_object_ids(model : OpenCLIPNetwork, data_list, save_folder, save_fold
         seg_map_flat = seg_map.reshape(-1) # N=H*W
         mask = seg_map_flat != -1 #N. group seg map (index value) to global 0-1 mask
         # object_id = 0 can mean the object is not relevant positive or is background
-        object_id_map = object_ids[seg_map_flat] # N x 1. Object_id for a mask could be -1 (from get_most_relevant_positive_id) if pos_prob < threshold (object of the mask is not relevant positive)
-        object_id_map[~mask] = -1 #background has no masks (index value -1 in seg_map), also set their object_id to -1
-        object_id_map = object_id_map + 1 # to make sure background is 0
+        object_id_map = object_ids[seg_map_flat] # N x 1. The possible values are 0,1,2,...,len(positives)-1,len(positives) (len(positives) means no relevant object)
+        object_id_map[~mask] = -1 #background has no masks (index value -1 in seg_map), set their object_id to -1. The possible values are -1,0,1,2,...,len(positives)-1,len(positives)
+        #object_id_map = object_id_map + 1 # to make sure background is 0
         object_id_map = object_id_map.reshape(1, h, w) # 1 x H x W
         test_save_folder = os.path.join(save_folder_obj_id, 'test_object_id_maps')
         os.makedirs(test_save_folder, exist_ok=True)

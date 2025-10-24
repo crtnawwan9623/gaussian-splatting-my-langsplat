@@ -59,15 +59,28 @@ def render_set(model_path, source_path, name, iteration, views, gaussians, pipel
         else:
             gt, mask = view.get_language_feature(os.path.join(source_path, args.language_features_name), feature_level=args.feature_level)
 
-        if args.include_feature
-            language_feature_reshaped = rendering.permute(1, 2, 0).reshape(N, 3) # [N,3]
-            obj_id_distribution = mlp_model.step(language_feature_reshaped) # [N,3] -> [N,3] (the 1st 3 is latent embeedding, the 2nd 3 is number of objects )
-            obj_id_prob, obj_id= obj_id_distribution.max(dim=1) #[N,3] -> [N]
-            obj_mask = mask.permute(1, 2, 0).reshape(N)  # [N], mask to remove background point (i.e., no mask point)
-            #valid_mask = obj_id_prob > 0.5 # threshold to remove irrrelevant postive id
-            obj_id *= obj_mask 
+        if args.include_feature:
+            language_feature_reshaped = rendering.permute(1, 2, 0).reshape(-1, 3) # [N,3]
+            obj_id_distribution = mlp_model.step(language_feature_reshaped) # [N,3] -> [N,4] (3 is latent embeedding, 4 is number of classes including no relevant object)
+            obj_id_prob, obj_id= obj_id_distribution.max(dim=1) #[N,4] -> [N], obj_id in [0,1,2,3], 3 means no relevant object
+            obj_mask = mask.permute(1, 2, 0).reshape(-1)  # [N], mask to remove background point (i.e., background points are 0 in mask)
+            num_of_classes = obj_id_distribution.shape[1] #4 = number of positives + 1 (no relevant object)
+            obj_id[~obj_mask] = num_of_classes - 1  # [N], set background points to "no relevant object" class (i.e., 3)
+            rendering = obj_id.reshape(rendering.shape[1], rendering.shape[2])[None, :, :].float()  # [1,H,W]
+            # Normalize rendering to [0, 1], the max value is num_of_classes -1
+            rendering = rendering / (num_of_classes - 1)
+
+            #process gt with the mask to set background points to "no relevant object" class (i.e., 3)
+            gt = gt * mask + (num_of_classes - 1) * (1 - mask)  # [1,H,W]
+            gt = gt.float() / (num_of_classes - 1)  # normalize gt to [0,1]
 
 
+            # language_feature_reshaped = rendering.permute(1, 2, 0).reshape(N, 3) # [N,3]
+            # obj_id_distribution = mlp_model.step(language_feature_reshaped) # [N,3] -> [N,3] (the 1st 3 is latent embeedding, the 2nd 3 is number of objects )
+            # obj_id_prob, obj_id= obj_id_distribution.max(dim=1) #[N,3] -> [N]
+            # obj_mask = mask.permute(1, 2, 0).reshape(N)  # [N], mask to remove background point (i.e., no mask point)
+            # #valid_mask = obj_id_prob > 0.5 # threshold to remove irrrelevant postive id
+            # obj_id *= obj_mask 
 
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))

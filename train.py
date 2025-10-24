@@ -158,24 +158,23 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             #reshape langauge_feautre from [3,H,W] to [N,3]
             N = language_feature.shape[1] * language_feature.shape[2]
             language_feature_reshaped = language_feature.permute(1, 2, 0).reshape(N, 3)
-            obj_id_distribution = mlp_model.step(language_feature_reshaped) # [N,3] -> [N,3] (the 1st 3 is latent embeedding, the 2nd 3 is number of objects )
-            obj_id = gt_language_feature # [1, H, W]
+            obj_id_distribution = mlp_model.step(language_feature_reshaped) # [N,3] -> [N,4] (3 is latent embeedding, 4 is number of classes including no relevant object)
+            obj_id = gt_language_feature # [1, H, W], possible values are 0,1,2,3 (len(positives)=3 means no relevant object)
             obj_mask = language_feature_mask # [1, H, W]
             #calculate cross entropy loss of obj_id_distribution and obj_id, considering obj_mask
             obj_id = obj_id.permute(1, 2, 0).reshape(N).long()  # [N]
 
-            #first mask to ignore background. 
+            # mask to ignore background. 
             # obj_mask=language_feature_mask is grouped mask (0/1) for all masks in the image. 
-            # So background points don't belong to any mask, hence have seg map index -1. 
+            # Background points don't belong to any mask, and have seg map index -1. 
             # Hence obj_mask=0 for background points (calculated in get_language_feature)
             obj_mask = obj_mask.permute(1, 2, 0).reshape(N)  # [N]
 
-            #second mask to ignore non-relevant objects in foreground
-            # object id -1 (non-relevant objects)
-            valid_mask = obj_id != -1  # [N]
-
-            #combine two masks
-            obj_mask = obj_mask * valid_mask  # [N]
+            # #second mask to ignore non-relevant objects in foreground
+            # # object id -1 (non-relevant objects)
+            # valid_mask = obj_id != -1  # [N]
+            # #combine two masks
+            # obj_mask = obj_mask * valid_mask  # [N]
 
             criterion = torch.nn.CrossEntropyLoss(reduction='none')
             ce_loss = criterion(obj_id_distribution, obj_id)  # [N]
