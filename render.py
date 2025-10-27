@@ -317,8 +317,9 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
         gaussians.restore(model_params, args, mode='test')
         deform = DeformModel(dataset.is_blender, dataset.is_6dof)
         deform.load_weights(dataset.model_path)
-        mlp_model = MlpModel()
-        mlp_model.load_weights(dataset.model_path)
+        if args.include_feature:
+            mlp_model = MlpModel()
+            mlp_model.load_weights(dataset.model_path)
 
         bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")

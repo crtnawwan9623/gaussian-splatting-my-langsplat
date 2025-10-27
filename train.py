@@ -270,6 +270,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 torch.save((gaussians.capture(opt.include_feature), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
                 if not opt.include_feature:
                     deform.save_weights(args.model_path, iteration)
+                if opt.include_feature:
+                    mlp_model.save_weights(args.model_path, iteration)
 
 def prepare_output_and_logger(args):    
     if not args.model_path:
@@ -360,7 +362,7 @@ if __name__ == "__main__":
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, 
-						default=[7_000, 30_000] + list(range(10000, 40001, 1000)))
+						default=([7_000, 30_000] + list(range(10000, 40001, 1000))))
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000, 40_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument('--disable_viewer', action='store_true', default=False)
