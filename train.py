@@ -61,12 +61,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             raise ValueError("checkpoint missing!!!!!")
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
-        if len(model_params) == 12 and opt.include_feature:
-            first_iter = 0
+        # if len(model_params) == 12 and opt.include_feature:
+        #     first_iter = 0
+        if opt.include_feature:
+            if len(model_params) == 12:
+                first_iter = 0
+            else:
+                mlp_model.load_weights(dataset.model_path)
         gaussians.restore(model_params, opt)
         deform.load_weights(dataset.model_path)
-        if opt.include_feature:
-            mlp_model.load_weights(dataset.model_path)
+        # if opt.include_feature:
+        #     mlp_model.load_weights(dataset.model_path)
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
@@ -176,6 +181,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # #combine two masks
             # obj_mask = obj_mask * valid_mask  # [N]
 
+            #Todo: for background points (mask=0), use len(positives)=3 as the ground truth label (same as no relevant object)
+            #this way, we can use all points for training, and not ignore background points
             criterion = torch.nn.CrossEntropyLoss(reduction='none')
             ce_loss = criterion(obj_id_distribution, obj_id)  # [N]
             ce_loss = (ce_loss * obj_mask).sum() / (obj_mask.sum() + 1e-8)

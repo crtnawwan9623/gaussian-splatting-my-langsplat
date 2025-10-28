@@ -71,7 +71,7 @@ def render_set(model_path, source_path, name, iteration, views, gaussians, pipel
             rendering = rendering / (num_of_classes - 1)
 
             #process gt with the mask to set background points to "no relevant object" class (i.e., 3)
-            gt = gt * mask + (num_of_classes - 1) * (1 - mask)  # [1,H,W]
+            gt = gt * mask + (num_of_classes - 1) * (~mask)  # [1,H,W]
             gt = gt.float() / (num_of_classes - 1)  # normalize gt to [0,1]
 
 
@@ -317,6 +317,7 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
         gaussians.restore(model_params, args, mode='test')
         deform = DeformModel(dataset.is_blender, dataset.is_6dof)
         deform.load_weights(dataset.model_path)
+        mlp_model = None
         if args.include_feature:
             mlp_model = MlpModel()
             mlp_model.load_weights(dataset.model_path)
