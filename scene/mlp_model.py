@@ -23,7 +23,7 @@ class MlpModel:
                 'lr': training_args.mlp_lr_init,
                 "name": "mlp"}
             ]
-            self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
+            self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15, weight_decay=1e-3)
 
             self.mlp_scheduler_args = get_expon_lr_func(lr_init=training_args.mlp_lr_init,
                                                         lr_final=training_args.mlp_lr_final,

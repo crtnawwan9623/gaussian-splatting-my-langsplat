@@ -92,7 +92,7 @@ class OptimizationParams(ParamGroup):
         self.mlp_lr_max_steps = 40_000
         self.feature_lr = 0.0025
         self.opacity_lr = 0.025
-        self.language_feature_lr = 0.0001 #0.0025 # TODO: update
+        self.language_feature_lr = 0.0025 #0.0025 # TODO: update
         self.include_feature = False # Set to False if train the original gs
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001

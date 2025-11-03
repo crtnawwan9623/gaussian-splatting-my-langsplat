@@ -202,29 +202,30 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             obj_id[~obj_mask] = obj_id_distribution.shape[1] - 1
 
             assert obj_id.min() >= 0 and obj_id.max() < obj_id_distribution.shape[1]
-            criterion = torch.nn.CrossEntropyLoss(reduction='none', label_smoothing=0.05)
+            criterion = torch.nn.CrossEntropyLoss(reduction='none')
             ce_loss = criterion(obj_id_distribution, obj_id)  # [N]
             # #calculate mean cross entropy loss for relevant object points
             # ce_loss_mean = (ce_loss * obj_mask).sum() / (obj_mask.sum() + 1e-8)
             # #calculate mean cross entropy loss for background and irrelevant object points
             # ce_loss_mean_back_and_irrelevant = (ce_loss * (~obj_mask)).sum() / ((~obj_mask).sum() + 1e-8)
-            # #ce_loss = ce_loss.mean()
-            # #Ll1 = ce_loss_mean
+            ce_loss_mean = ce_loss.mean()
+            Ll1 = ce_loss_mean
             # lambda_ce_back_and_irrelevant = 0.3
             # Ll1 = (1- lambda_ce_back_and_irrelevant) * ce_loss_mean + lambda_ce_back_and_irrelevant * ce_loss_mean_back_and_irrelevant
-            # loss = Ll1
-            lambda_ce_back_and_irrelevant = 0.5
-            pos = obj_mask
-            neg = ~pos
-            pos_count = pos.sum().clamp(min=1)
-            neg_count = neg.sum().clamp(min=1)
-
-            w_pos = (1.0 - lambda_ce_back_and_irrelevant) / pos_count
-            w_neg = lambda_ce_back_and_irrelevant / neg_count
-            weights = torch.where(pos, w_pos, w_neg) # [N]
-
-            Ll1 = (weights * ce_loss).sum()  # total weight ~ 1 each step
             loss = Ll1
+
+            # lambda_ce_back_and_irrelevant = 0.5
+            # pos = obj_mask
+            # neg = ~pos
+            # pos_count = pos.sum().clamp(min=1)
+            # neg_count = neg.sum().clamp(min=1)
+
+            # w_pos = (1.0 - lambda_ce_back_and_irrelevant) / pos_count
+            # w_neg = lambda_ce_back_and_irrelevant / neg_count
+            # weights = torch.where(pos, w_pos, w_neg) # [N]
+
+            # Ll1 = (weights * ce_loss).sum()  # total weight ~ 1 each step
+            # loss = Ll1
         else:
             gt_image = viewpoint_cam.original_image.cuda()
             Ll1 = l1_loss(image, gt_image)
@@ -313,7 +314,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if not opt.include_feature:
                     deform.optimizer.step()
                     deform.optimizer.zero_grad()
-                if opt.include_feature:
+                freeze_mlp_until_iter = 1000
+                if opt.include_feature and iteration < freeze_mlp_until_iter:
                     # calculate pre_sum of mlp_model parameters for debugging
                     param_sum = sum_params_from_optimizer(mlp_model.optimizer)
                     print(f"MLP model parameter sum before step: {param_sum}") if iteration % 100 == 0 else None
@@ -420,7 +422,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                         if iteration == testing_iterations[0]:
                             tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
                         #if iteration == testing_iterations[1]:
-                        if iteration == 500:
+                        if iteration == 2000:
                             #save images in text format
                             npy_path = os.path.join(scene.model_path, f"{config['name']}_obj_id_dist_N4_{viewpoint.image_name}_iter_{iteration}.txt")
                             npy_data = obj_id_distribution.cpu().numpy()
