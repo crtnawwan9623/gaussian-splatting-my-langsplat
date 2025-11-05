@@ -231,11 +231,12 @@ class GaussianModel:
         if training_args.include_feature:
             if self._language_feature is None or self._language_feature.shape[0] != self._xyz.shape[0]:
                 # 开始feature训练的时候，往模型中加入language feature参数
-                language_feature = torch.zeros((self._xyz.shape[0], 3), device="cuda")
+                #language_feature = torch.zeros((self._xyz.shape[0], 3), device="cuda")
+                language_feature = torch.randn((self._xyz.shape[0], 3), device="cuda") * 0.5
                 self._language_feature = nn.Parameter(language_feature.requires_grad_(True))
                 
             l = [
-                {'params': [self._language_feature], 'lr': training_args.language_feature_lr, "name": "language_feature"}, # TODO: training_args.language_feature_lr
+                {'params': [self._language_feature], 'lr': training_args.language_feature_lr_init, "name": "language_feature"}, # TODO: training_args.language_feature_lr
             ]
             self._xyz.requires_grad_(False)
             self._features_dc.requires_grad_(False)
@@ -274,6 +275,10 @@ class GaussianModel:
                                                         lr_delay_steps=training_args.exposure_lr_delay_steps,
                                                         lr_delay_mult=training_args.exposure_lr_delay_mult,
                                                         max_steps=training_args.iterations)
+        self.langauge_feautre_scheduler_args = get_expon_lr_func(lr_init=training_args.language_feature_lr_init,
+                                                                lr_final=training_args.language_feature_lr_final,
+                                                                lr_delay_mult=training_args.language_feature_lr_delay_mult,
+                                                                max_steps=training_args.language_feature_lr_max_steps)
 
     def update_learning_rate(self, iteration):
         ''' Learning rate scheduling per step '''
@@ -285,6 +290,12 @@ class GaussianModel:
             if param_group["name"] == "xyz":
                 lr = self.xyz_scheduler_args(iteration)
                 param_group['lr'] = lr
+                return lr
+            elif param_group["name"] == "language_feature":
+                lr = self.langauge_feautre_scheduler_args(iteration)
+                param_group['lr'] = lr
+                if iteration % 100 == 0:
+                    print(f"Language feature lr: {lr}")
                 return lr
 
     def construct_list_of_attributes(self):

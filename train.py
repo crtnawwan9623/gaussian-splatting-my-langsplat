@@ -184,16 +184,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Background points don't belong to any mask, and have seg map index -1. 
             # Hence obj_mask=0 for background points (calculated in get_language_feature)
             obj_mask = obj_mask.permute(1, 2, 0).reshape(N)  # [N]
-
-            # #second mask to ignore non-relevant objects in foreground
-            # # object id -1 (non-relevant objects)
-            # valid_mask = obj_id != -1  # [N]
-            # #combine two masks
-            # obj_mask = obj_mask * valid_mask  # [N]
-
-            #For background points (mask=0), use len(positives)=3 as the ground truth label (same as no relevant object)
-            #this way, we can use all points for training, and not ignore background points
-            #obj_id[~obj_mask] = obj_id_distribution.shape[1] - 1  # [N], set background points to "no relevant object" class (i.e., 3)
             
             #create mask to ignore irrelevant object id (3)
             valid_obj_mask = (obj_id >= 0) & (obj_id < obj_id_distribution.shape[1]-1)  # [N]
@@ -202,29 +192,47 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             obj_id[~obj_mask] = obj_id_distribution.shape[1] - 1
 
             assert obj_id.min() >= 0 and obj_id.max() < obj_id_distribution.shape[1]
+
+            #print total number of '2' in obj_id and also number of points in obj_id_distribution with max prob for class 2
+            if iteration % 100 == 0:
+                #num_obj_2 = (obj_id == 2).sum().item()
+                max_prob_obj_2 = (obj_id_distribution.argmax(dim=1) == 2).sum().item()
+                max_prob_obj_1 = (obj_id_distribution.argmax(dim=1) == 1).sum().item()
+                max_prob_obj_0 = (obj_id_distribution.argmax(dim=1) == 0).sum().item()
+                #print(f"Iteration {iteration}: Number of points with object id 2: {num_obj_2}, Number of points with max prob for class 2: {max_prob_obj_2}")
+                print(f"Iteration {iteration}: Number of points with max prob for class 0: {max_prob_obj_0}, class 1: {max_prob_obj_1}, class 2: {max_prob_obj_2}")
+
+
             criterion = torch.nn.CrossEntropyLoss(reduction='none')
             ce_loss = criterion(obj_id_distribution, obj_id)  # [N]
+
             # #calculate mean cross entropy loss for relevant object points
             # ce_loss_mean = (ce_loss * obj_mask).sum() / (obj_mask.sum() + 1e-8)
             # #calculate mean cross entropy loss for background and irrelevant object points
             # ce_loss_mean_back_and_irrelevant = (ce_loss * (~obj_mask)).sum() / ((~obj_mask).sum() + 1e-8)
-            ce_loss_mean = ce_loss.mean()
-            Ll1 = ce_loss_mean
             # lambda_ce_back_and_irrelevant = 0.3
             # Ll1 = (1- lambda_ce_back_and_irrelevant) * ce_loss_mean + lambda_ce_back_and_irrelevant * ce_loss_mean_back_and_irrelevant
-            loss = Ll1
+            # loss = Ll1
 
-            # lambda_ce_back_and_irrelevant = 0.5
+            # lambda_ce_back_and_irrelevant = 0.01
             # pos = obj_mask
             # neg = ~pos
             # pos_count = pos.sum().clamp(min=1)
             # neg_count = neg.sum().clamp(min=1)
-
             # w_pos = (1.0 - lambda_ce_back_and_irrelevant) / pos_count
             # w_neg = lambda_ce_back_and_irrelevant / neg_count
             # weights = torch.where(pos, w_pos, w_neg) # [N]
-
             # Ll1 = (weights * ce_loss).sum()  # total weight ~ 1 each step
+            # loss = Ll1
+
+            ce_loss_mean = ce_loss.mean()
+            Ll1 = ce_loss_mean
+            loss = Ll1
+
+            # Calculate the loss only for obj_id = 2
+            # obj_2_mask = (obj_id == 2)
+            # ce_loss_mean = (ce_loss * obj_2_mask).sum() / (obj_2_mask.sum() + 1e-8)
+            # Ll1 = ce_loss_mean
             # loss = Ll1
         else:
             gt_image = viewpoint_cam.original_image.cuda()
@@ -269,13 +277,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.close()
 
             # Log and save
-            # if opt.include_feature:
-            #     mlp_model.mlp.eval()
+            if opt.include_feature:
+                mlp_model.mlp.eval()
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), 
 							testing_iterations, scene, render, (pipe, background, opt, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset, deform,
 							dataset.load2gpu_on_the_fly, mlp_model)
-            # if opt.include_feature:
-            #     mlp_model.mlp.train()
+            if opt.include_feature:
+                mlp_model.mlp.train()
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -314,8 +322,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if not opt.include_feature:
                     deform.optimizer.step()
                     deform.optimizer.zero_grad()
-                freeze_mlp_until_iter = 1000
-                if opt.include_feature and iteration < freeze_mlp_until_iter:
+                freeze_mlp_until_iter = 0
+                freeze_mlp_after_iter = 1010
+                if opt.include_feature and iteration >= freeze_mlp_until_iter and iteration < freeze_mlp_after_iter:
                     # calculate pre_sum of mlp_model parameters for debugging
                     param_sum = sum_params_from_optimizer(mlp_model.optimizer)
                     print(f"MLP model parameter sum before step: {param_sum}") if iteration % 100 == 0 else None
@@ -415,14 +424,19 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                         # image = image.reshape(rendering.shape[1], rendering.shape[2]).unsqueeze(0) # [1,H,W]
                         # gt_image = gt_image.reshape(rendering.shape[1], rendering.shape[2]).unsqueeze(0) # [1,H,W] 
 
+                        #convert rendering (-1,1) to (0,1) and add clip for visualization
+                        rendering_vis = (rendering + 1.0) / 2.0
+                        rendering_vis = torch.clamp(rendering_vis, 0.0, 1.0)
+
                     if load2gpu_on_the_fly:
                         viewpoint.load2device('cpu')
                     if tb_writer and (idx < 5):
                         tb_writer.add_images(config['name'] + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
+                        tb_writer.add_images(config['name'] + "_view_{}/lang".format(viewpoint.image_name), rendering_vis[None], global_step=iteration) if rendering_vis is not None else None
                         if iteration == testing_iterations[0]:
                             tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
                         #if iteration == testing_iterations[1]:
-                        if iteration == 2000:
+                        if iteration == 20000:
                             #save images in text format
                             npy_path = os.path.join(scene.model_path, f"{config['name']}_obj_id_dist_N4_{viewpoint.image_name}_iter_{iteration}.txt")
                             npy_data = obj_id_distribution.cpu().numpy()
@@ -460,7 +474,7 @@ if __name__ == "__main__":
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, 
-						default=([1, 500, 7_000, 30_000] + list(range(1000, 40001, 1000))))
+						default=([1, 100, 200, 500, 7_000, 30_000] + list(range(1000, 40001, 500))))
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000, 40_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument('--disable_viewer', action='store_true', default=False)
