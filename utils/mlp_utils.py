@@ -9,13 +9,12 @@ class MlpUtilityNetwork(nn.Module):
         layers = []
         if hidden_layers > 0:
             layers.append(nn.Linear(input_size, hidden_units))
-            #layers.append(nn.BatchNorm1d(hidden_units))
-            #layers.append(nn.GELU())
-            #layers.append(nn.Dropout(p=0.5))
-            # for _ in range(hidden_layers - 1):
-            #     layers.append(nn.Linear(hidden_units, hidden_units))
-            #     layers.append(nn.BatchNorm1d(hidden_units))
-            #     layers.append(nn.ReLU(inplace=True))
+            layers.append(nn.BatchNorm1d(hidden_units))
+            layers.append(nn.ReLU())
+            for _ in range(hidden_layers - 1):
+                layers.append(nn.Linear(hidden_units, hidden_units))
+                layers.append(nn.BatchNorm1d(hidden_units))
+                layers.append(nn.ReLU(inplace=True))
             layers.append(nn.Linear(hidden_units, output_size))
             self.network = nn.Sequential(*layers)
         else:
@@ -25,7 +24,6 @@ class MlpUtilityNetwork(nn.Module):
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 #nn.init.kaiming_normal_(m.weight, nonlinearity='linear')
-                #nn.init.xavier_normal_(m.weight)
                 nn.init.xavier_uniform_(m.weight)
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
