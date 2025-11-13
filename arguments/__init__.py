@@ -61,6 +61,7 @@ class ModelParams(ParamGroup):
         self.load2gpu_on_the_fly = False
         self.is_blender = False
         self.is_6dof = False
+        self.langauge_feautre_dim = 16
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -86,15 +87,15 @@ class OptimizationParams(ParamGroup):
         self.position_lr_delay_mult = 0.01
         self.position_lr_max_steps = 40_000
         self.deform_lr_max_steps = 40_000
-        self.mlp_lr_init = 0.0001*10 #0.0001*10
-        self.mlp_lr_final = 0.000001
+        self.mlp_lr_init = 0.001
+        self.mlp_lr_final = 0.000001*100 #0.000001
         self.mlp_lr_delay_mult=0.01
         self.mlp_lr_max_steps = 40_000
         self.feature_lr = 0.0025
         self.opacity_lr = 0.025
         #self.language_feature_lr = 0.0025 #0.0025 # TODO: update
-        self.language_feature_lr_init = 0.0025 #0.0025*3
-        self.language_feature_lr_final = 0.000025 #0.0000025
+        self.language_feature_lr_init = 0.0025
+        self.language_feature_lr_final = 0.000025*10 #0.000025
         self.language_feature_lr_delay_mult = 0.01
         self.language_feature_lr_max_steps = 40_000
         self.include_feature = False # Set to False if train the original gs

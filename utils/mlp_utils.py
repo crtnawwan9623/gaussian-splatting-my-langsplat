@@ -3,17 +3,17 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class MlpUtilityNetwork(nn.Module):
-    def __init__(self, input_size, output_size, hidden_layers=0, hidden_units=8):
+    def __init__(self, input_size, output_size, hidden_layers=1, hidden_units=32):
         super(MlpUtilityNetwork, self).__init__()
         self.input_norm = nn.LayerNorm(input_size, elementwise_affine=True)
         layers = []
         if hidden_layers > 0:
             layers.append(nn.Linear(input_size, hidden_units))
-            layers.append(nn.BatchNorm1d(hidden_units))
+            layers.append(nn.LayerNorm(hidden_units))
             layers.append(nn.ReLU())
             for _ in range(hidden_layers - 1):
                 layers.append(nn.Linear(hidden_units, hidden_units))
-                layers.append(nn.BatchNorm1d(hidden_units))
+                layers.append(nn.LayerNorm(hidden_units))
                 layers.append(nn.ReLU(inplace=True))
             layers.append(nn.Linear(hidden_units, output_size))
             self.network = nn.Sequential(*layers)
@@ -27,7 +27,7 @@ class MlpUtilityNetwork(nn.Module):
                 nn.init.xavier_uniform_(m.weight)
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
-            elif isinstance(m, nn.BatchNorm1d):
+            elif isinstance(m, nn.LayerNorm):
                 nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
     def forward(self, x):

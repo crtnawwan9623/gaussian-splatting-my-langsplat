@@ -101,7 +101,7 @@ class GaussianModel:
                 self.spatial_lr_scale,
             )            
     
-    def restore(self, model_args, training_args, mode='train'):
+    def restore(self, model_args, training_args, dataset, mode='train'):
         if len(model_args) == 13: # 这是一个feature训练时保存的ckpt
             (self.active_sh_degree, 
             self._xyz, 
@@ -133,7 +133,7 @@ class GaussianModel:
                 self.optimizer.load_state_dict(opt_dict)
         
         if mode == 'train':
-            self.training_setup(training_args)
+            self.training_setup(training_args, dataset)
             self.xyz_gradient_accum = xyz_gradient_accum
             self.denom = denom
         
@@ -223,7 +223,7 @@ class GaussianModel:
         exposure = torch.eye(3, 4, device="cuda")[None].repeat(len(cam_infos), 1, 1)
         self._exposure = nn.Parameter(exposure.requires_grad_(True))
 
-    def training_setup(self, training_args):
+    def training_setup(self, training_args, dataset):
         self.percent_dense = training_args.percent_dense
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
@@ -232,7 +232,7 @@ class GaussianModel:
             if self._language_feature is None or self._language_feature.shape[0] != self._xyz.shape[0]:
                 # 开始feature训练的时候，往模型中加入language feature参数
                 #language_feature = torch.zeros((self._xyz.shape[0], 3), device="cuda")
-                language_feature = torch.randn((self._xyz.shape[0], 3), device="cuda") * 0.5
+                language_feature = torch.randn((self._xyz.shape[0], dataset.langauge_feautre_dim), device="cuda") * 0.5
                 self._language_feature = nn.Parameter(language_feature.requires_grad_(True))
                 
             l = [

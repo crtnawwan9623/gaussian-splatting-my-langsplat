@@ -8,8 +8,8 @@ from utils.general_utils import get_expon_lr_func
 
 
 class MlpModel:
-    def __init__(self):
-        self.mlp = MlpUtilityNetwork(input_size=3, output_size=4).cuda()
+    def __init__(self, input_size=3, output_size=4):
+        self.mlp = MlpUtilityNetwork(input_size, output_size).cuda()
         self.optimizer = None
         self.spatial_lr_scale = 5
 

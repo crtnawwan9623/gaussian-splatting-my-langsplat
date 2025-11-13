@@ -60,10 +60,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     deform = DeformModel(dataset.is_blender, dataset.is_6dof)
     deform.train_setting(opt)
     scene = Scene(dataset, gaussians)
-    gaussians.training_setup(opt)
+    #gaussians.training_setup(opt,dataset)
     mlp_model = None
     if opt.include_feature:
-        mlp_model = MlpModel()
+        mlp_model = MlpModel(input_size=dataset.langauge_feautre_dim, output_size=4)
         mlp_model.train_setting(opt)
 
     if opt.include_feature:
@@ -76,12 +76,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if opt.include_feature:
             if len(model_params) == 12:
                 first_iter = 0
+                print("first_iter reset to 0 for language feature training")
             else:
                 mlp_model.load_weights(dataset.model_path)
-        gaussians.restore(model_params, opt)
+                print("Traing language feature from checkpoint at iteration {}".format(first_iter))
+        gaussians.restore(model_params, opt, dataset)
         deform.load_weights(dataset.model_path)
         # if opt.include_feature:
         #     mlp_model.load_weights(dataset.model_path)
+    else:
+        gaussians.training_setup(opt,dataset)
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
@@ -173,7 +177,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             #Ll1 = l1_loss(language_feature*language_feature_mask, gt_language_feature*language_feature_mask)
             #reshape langauge_feautre from [3,H,W] to [N,3]
             N = language_feature.shape[1] * language_feature.shape[2]
-            language_feature_reshaped = language_feature.permute(1, 2, 0).reshape(N, 3)
+            language_feature_reshaped = language_feature.permute(1, 2, 0).reshape(N, -1)
             obj_id_distribution = mlp_model.step(language_feature_reshaped) # [N,3] -> [N,4] (3 is latent embeedding, 4 is number of classes including no relevant object)
             obj_id = gt_language_feature # [1, H, W], possible values are 0,1,2,3 (len(positives)=3 means no relevant object)
             obj_mask = language_feature_mask # [1, H, W]
@@ -195,13 +199,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             assert obj_id.min() >= 0 and obj_id.max() < obj_id_distribution.shape[1]
 
             #print total number of '2' in obj_id and also number of points in obj_id_distribution with max prob for class 2
-            # if iteration % 100 == 0:
-            #     #num_obj_2 = (obj_id == 2).sum().item()
-            #     max_prob_obj_2 = (obj_id_distribution.argmax(dim=1) == 2).sum().item()
-            #     max_prob_obj_1 = (obj_id_distribution.argmax(dim=1) == 1).sum().item()
-            #     max_prob_obj_0 = (obj_id_distribution.argmax(dim=1) == 0).sum().item()
-            #     #print(f"Iteration {iteration}: Number of points with object id 2: {num_obj_2}, Number of points with max prob for class 2: {max_prob_obj_2}")
-            #     print(f"Iteration {iteration}: Number of points with max prob for class 0: {max_prob_obj_0}, class 1: {max_prob_obj_1}, class 2: {max_prob_obj_2}")
+            if iteration % 100 == 0:
+                #num_obj_2 = (obj_id == 2).sum().item()
+                max_prob_obj_2 = (obj_id_distribution.argmax(dim=1) == 2).sum().item()
+                max_prob_obj_1 = (obj_id_distribution.argmax(dim=1) == 1).sum().item()
+                max_prob_obj_0 = (obj_id_distribution.argmax(dim=1) == 0).sum().item()
+                #print(f"Iteration {iteration}: Number of points with object id 2: {num_obj_2}, Number of points with max prob for class 2: {max_prob_obj_2}")
+                print(f"Iteration {iteration}: Number of points with max prob for class 0: {max_prob_obj_0}, class 1: {max_prob_obj_1}, class 2: {max_prob_obj_2}")
 
 
             criterion = torch.nn.CrossEntropyLoss(reduction='none')
@@ -348,7 +352,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
         tb_writer.add_scalar('iter_time', elapsed, iteration)
 
     # Report test and samples of training set
-    if iteration in testing_iterations:
+    if iteration in testing_iterations or iteration == opt.iterations:
         torch.cuda.empty_cache()
         validation_configs = ({'name': 'test', 'cameras' : scene.getTestCameras()}, 
                               {'name': 'train', 'cameras' : [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]})
@@ -374,7 +378,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                         gt_image, mask = viewpoint.get_language_feature(language_feature_dir=dataset.lf_path, feature_level=dataset.feature_level) # [1,H,W]
 
                         rendering = renderFunc(viewpoint, scene.gaussians, d_xyz, d_rotation, d_scaling, dataset.is_6dof, *renderArgs)["language_feature_image"] # [3,H,W]
-                        language_feature_reshaped = rendering.permute(1, 2, 0).reshape(-1, 3) # [N,3]
+                        language_feature_reshaped = rendering.permute(1, 2, 0).reshape(-1, dataset.langauge_feautre_dim) # [N,3]
                         obj_id_distribution = mlp_model.step(language_feature_reshaped) # [N,3] -> [N,4]
 
                         gt_image = gt_image.to("cuda")
@@ -399,8 +403,9 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                         viewpoint.load2device('cpu')
                     if tb_writer and (idx < 5):
                         tb_writer.add_images(config['name'] + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
-                        tb_writer.add_images(config['name'] + "_view_{}/lang".format(viewpoint.image_name), rendering_vis[None], global_step=iteration) if rendering_vis is not None else None
-                        if iteration == testing_iterations[0]:
+                        #tb_writer.add_images(config['name'] + "_view_{}/lang".format(viewpoint.image_name), rendering_vis[None], global_step=iteration) if rendering_vis is not None else None
+                        #if iteration == testing_iterations[0]:
+                        if iteration == opt.iterations:
                             tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
                     l1_test += l1_loss(image.float(), gt_image.float()).mean().double()
                     psnr_test += psnr(image.float(), gt_image.float()).mean().double()
@@ -428,10 +433,10 @@ if __name__ == "__main__":
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, 
 						default=([1, 100, 200, 500, 7_000, 30_000] + list(range(1000, 40001, 500))))
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000, 40_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000, 80_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument('--disable_viewer', action='store_true', default=False)
-    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[10_000, 40_000])
+    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[10_000, 80_000])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
