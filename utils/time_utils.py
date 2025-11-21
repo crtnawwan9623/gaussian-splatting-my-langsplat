@@ -56,7 +56,9 @@ class Embedder:
 
 
 class DeformNetwork(nn.Module):
-    def __init__(self, D=8, W=256, input_ch=3, output_ch=59, multires=10, is_blender=False, is_6dof=False):
+    # default D=8, W=256
+    # D=10, W=256 works better for car3-dynamic
+    def __init__(self, D=10, W=512, input_ch=3, output_ch=59, multires=10, is_blender=False, is_6dof=False):
         super(DeformNetwork, self).__init__()
         self.D = D
         self.W = W

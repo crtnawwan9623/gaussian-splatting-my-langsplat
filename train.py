@@ -70,6 +70,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if not checkpoint:
             raise ValueError("checkpoint missing!!!!!")
     if checkpoint:
+        print("Loading checkpoint from {}".format(checkpoint))
         (model_params, first_iter) = torch.load(checkpoint)
         # if len(model_params) == 12 and opt.include_feature:
         #     first_iter = 0
@@ -82,8 +83,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 print("Traing language feature from checkpoint at iteration {}".format(first_iter))
         gaussians.restore(model_params, opt, dataset)
         deform.load_weights(dataset.model_path)
-        # if opt.include_feature:
-        #     mlp_model.load_weights(dataset.model_path)
     else:
         gaussians.training_setup(opt,dataset)
 
@@ -406,6 +405,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                         #tb_writer.add_images(config['name'] + "_view_{}/lang".format(viewpoint.image_name), rendering_vis[None], global_step=iteration) if rendering_vis is not None else None
                         #if iteration == testing_iterations[0]:
                         if iteration == opt.iterations:
+                            print("Adding GT image to tensorboard for view {}".format(viewpoint.image_name))
                             tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
                     l1_test += l1_loss(image.float(), gt_image.float()).mean().double()
                     psnr_test += psnr(image.float(), gt_image.float()).mean().double()
@@ -433,10 +433,10 @@ if __name__ == "__main__":
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, 
 						default=([1, 100, 200, 500, 7_000, 30_000] + list(range(1000, 40001, 500))))
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000, 80_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000, 40_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument('--disable_viewer', action='store_true', default=False)
-    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[10_000, 80_000])
+    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[10_000, 41_000])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)

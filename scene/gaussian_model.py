@@ -129,11 +129,13 @@ class GaussianModel:
             denom,
             opt_dict, 
             self.spatial_lr_scale) = model_args
-            if not training_args.include_feature and mode == 'train': # 如果是以原始gs为初始化来训练feature的话，就不需要restore optimizer
-                self.optimizer.load_state_dict(opt_dict)
+            # if not training_args.include_feature and mode == 'train': # 如果是以原始gs为初始化来训练feature的话，就不需要restore optimizer
+            #     self.optimizer.load_state_dict(opt_dict)
         
         if mode == 'train':
             self.training_setup(training_args, dataset)
+            if len(model_args) == 12 and not training_args.include_feature: # 如果是以原始gs为初始化来训练feature的话，就不需要restore optimizer
+                self.optimizer.load_state_dict(opt_dict)
             self.xyz_gradient_accum = xyz_gradient_accum
             self.denom = denom
         

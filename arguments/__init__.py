@@ -58,7 +58,7 @@ class ModelParams(ParamGroup):
         self.train_test_exp = False
         self.data_device = "cuda"
         self.eval = False
-        self.load2gpu_on_the_fly = False
+        self.load2gpu_on_the_fly = True
         self.is_blender = False
         self.is_6dof = False
         self.langauge_feautre_dim = 16
