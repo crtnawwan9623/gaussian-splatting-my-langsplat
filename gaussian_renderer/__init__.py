@@ -49,7 +49,8 @@ def render(viewpoint_camera, pc : GaussianModel, d_xyz, d_rotation, d_scaling, i
         prefiltered=False,
         debug=pipe.debug,
         antialiasing=pipe.antialiasing,
-		include_feature=opt.include_feature
+		include_feature=opt.include_feature,
+        include_max_contrib=opt.include_max_contrib
     )
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
@@ -106,7 +107,7 @@ def render(viewpoint_camera, pc : GaussianModel, d_xyz, d_rotation, d_scaling, i
     # Rasterize visible Gaussians to image, obtain their radii (on screen).
 	# start_time = time.time() 
     if separate_sh:
-        rendered_image, language_feature_image, radii, depth_image = rasterizer(
+        rendered_image, language_feature_image, max_contrib, radii, depth_image = rasterizer(
             means3D = means3D,
             means2D = means2D,
             dc = dc,
@@ -118,7 +119,7 @@ def render(viewpoint_camera, pc : GaussianModel, d_xyz, d_rotation, d_scaling, i
             rotations = rotations,
             cov3D_precomp = cov3D_precomp)
     else:
-        rendered_image, language_feature_image, radii, depth_image = rasterizer(
+        rendered_image, language_feature_image, max_contrib, radii, depth_image = rasterizer(
             means3D = means3D,
             means2D = means2D,
             shs = shs,
@@ -142,6 +143,7 @@ def render(viewpoint_camera, pc : GaussianModel, d_xyz, d_rotation, d_scaling, i
     out = {
         "render": rendered_image,
 		"language_feature_image": language_feature_image,
+        "max_contrib": max_contrib,
         "viewspace_points": screenspace_points,
         "visibility_filter" : (radii > 0).nonzero(),
         "radii": radii,

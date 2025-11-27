@@ -62,6 +62,7 @@ class ModelParams(ParamGroup):
         self.is_blender = False
         self.is_6dof = False
         self.langauge_feautre_dim = 16
+        self.num_positives = 3
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -99,6 +100,7 @@ class OptimizationParams(ParamGroup):
         self.language_feature_lr_delay_mult = 0.01
         self.language_feature_lr_max_steps = 40_000
         self.include_feature = False # Set to False if train the original gs
+        self.include_max_contrib = False # Can set to True only when training the origianl gs
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
         self.exposure_lr_init = 0.01
@@ -116,6 +118,7 @@ class OptimizationParams(ParamGroup):
         self.depth_l1_weight_final = 0.01
         self.random_background = False
         self.optimizer_type = "default"
+        self.regularize_max_contrib_after_iter = 20000
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):
