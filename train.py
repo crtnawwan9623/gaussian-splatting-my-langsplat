@@ -269,6 +269,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     #calculat norm of d_xyz_target
                     d_xyz_norm = torch.norm(d_xyz_target, dim=1)  # [M]
                     d_xyz_norm_mean = d_xyz_norm.mean() # scalar
+                    d_xyz_norm_std = torch.std(d_xyz_norm) # scalar
                     #create KL divergence loss to encourage d_xyz_norm to be close to d_xyz_norm_mean
                     # Avoid division by zero by adding a small epsilon
                     epsilon = 1e-8
@@ -277,6 +278,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                     # Compute KL-divergence loss
                     kl_div_loss = torch.sum(d_xyz_norm_mean * torch.log(d_xyz_norm_mean / d_xyz_norm))
+                    if iteration % 100 == 0:
+                        print(f"Iteration {iteration}: KL Divergence Loss for target obj id {target_obj_id}: {kl_div_loss.item()}, Mean Norm: {d_xyz_norm_mean.item()}, Std Dev: {d_xyz_norm_std.item()}, Num Points: {d_xyz_target.shape[0]}")
 
                     # Weight the KL-divergence loss and add it to the total loss
                     kl_div_weight = 0.1  # Adjust this weight as needed
@@ -478,7 +481,7 @@ if __name__ == "__main__":
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, 
-						default=([1, 100, 200, 500, 7_000, 30_000] + list(range(1000, 40001, 500))))
+						default=([1, 100, 200, 500] + list(range(1000, 90001, 500))))
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000, 40_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument('--disable_viewer', action='store_true', default=False)
