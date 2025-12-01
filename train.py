@@ -49,6 +49,49 @@ def sum_params_from_optimizer(optimizer):
                 if p is not None:
                     total += p.data.sum().item()
         return total
+def calculate_max_contrib_regularization(max_contrib, delta, viewpoint_cam, dataset):
+    H, W = max_contrib.shape  # Dimensions of max_contrib
+    max_contrib_flat = max_contrib.reshape(-1)  # [H,W] -> [H*W]
+    delta_max_contrib = delta[max_contrib_flat]  # [H*W, 3]
+    delta_max_contrib = delta_max_contrib.reshape(H, W, -1)  # [H*W, 3] -> [H, W, 3]
+
+    gt_language_feature, language_feature_mask = viewpoint_cam.get_language_feature(language_feature_dir=dataset.lf_path, feature_level=dataset.feature_level)
+    N = gt_language_feature.shape[1] * gt_language_feature.shape[2] # H*W
+    
+    obj_id = gt_language_feature # [1, H, W], possible values are 0,1,2,3 (len(positives)=3 means no relevant object)
+    obj_mask = language_feature_mask # [1, H, W]
+    obj_id = obj_id.permute(1, 2, 0).reshape(N)  # [N]
+    obj_mask = obj_mask.permute(1, 2, 0).reshape(N)  # [N]
+    
+    #create mask to ignore irrelevant object id (3)
+    id_irrelevant = dataset.num_positives  # 3
+    valid_obj_mask = (obj_id >= 0) & (obj_id < id_irrelevant)  # [N]
+    obj_mask = obj_mask & valid_obj_mask  # [N]
+    #set background and irrelevant object id to no relevant object class(3)
+    obj_id[~obj_mask] = id_irrelevant # [N]
+    obj_id = obj_id.reshape(H, W)  # [H, W]
+
+    #extract mask for obj_id == 2
+    target_obj_id = 2
+    target_mask = (obj_id == target_obj_id)  # [H, W], bool
+    #extract delta for target obj_id
+    delta_target = delta_max_contrib[target_mask]  # [M, 3]. This is the displacement for gaussians that belong to target obj id = 2
+    if delta_target.shape[0] > 0:
+        #calculat norm of delta_target
+        delta_norm = torch.norm(delta_target, dim=1)  # [M]
+        delta_norm_mean = delta_norm.mean() # scalar
+        delta_norm_std = torch.std(delta_norm) # scalar
+        #create KL divergence loss to encourage delta_norm to be close to delta_norm_mean
+        # Avoid division by zero by adding a small epsilon
+        epsilon = 1e-8
+        delta_norm = delta_norm + epsilon
+        delta_norm_mean = delta_norm_mean + epsilon
+
+        # Compute KL-divergence loss
+        kl_div_loss = torch.sum(delta_norm_mean * torch.log(delta_norm_mean / delta_norm))
+        return kl_div_loss
+    else:
+        return 0.0
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
 
     if not SPARSE_ADAM_AVAILABLE and opt.optimizer_type == "sparse_adam":
@@ -237,53 +280,60 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             else:
                 Ll1depth = 0
             
-            if opt.include_max_contrib and iteration > opt.regularize_max_contrib_after_iter:
-                # gather d_xyz [N,3] for all gaussians in max_contrib [H,W]
-                H, W = max_contrib.shape  # Dimensions of max_contrib
-                max_contrib_flat = max_contrib.reshape(-1)  # [H,W] -> [H*W]
-                d_xyz_max_contrib = d_xyz[max_contrib_flat]  # [H*W, 3]
-                d_xyz_max_contrib = d_xyz_max_contrib.reshape(H, W, 3)  # [H*W, 3] -> [H, W, 3]
+            if opt.include_max_contrib and iteration > opt.regularize_max_contrib_after_iter and iteration > opt.warm_up:
+                d_xyz_reg_loss = calculate_max_contrib_regularization(max_contrib, d_xyz, viewpoint_cam, dataset)
+                d_rotation_reg_loss = calculate_max_contrib_regularization(max_contrib, d_rotation, viewpoint_cam, dataset)
+                d_scaling_reg_loss = calculate_max_contrib_regularization(max_contrib, d_scaling, viewpoint_cam, dataset)
+                reg_loss = d_xyz_reg_loss + d_rotation_reg_loss + d_scaling_reg_loss
+                kl_div_weight = 0.1  # Adjust this weight as needed
+                loss += kl_div_weight * reg_loss
 
-                gt_language_feature, language_feature_mask = viewpoint_cam.get_language_feature(language_feature_dir=dataset.lf_path, feature_level=dataset.feature_level)
-                N = gt_language_feature.shape[1] * gt_language_feature.shape[2] # H*W
+                # # gather d_xyz [N,3] for all gaussians in max_contrib [H,W]
+                # H, W = max_contrib.shape  # Dimensions of max_contrib
+                # max_contrib_flat = max_contrib.reshape(-1)  # [H,W] -> [H*W]
+                # d_xyz_max_contrib = d_xyz[max_contrib_flat]  # [H*W, 3]
+                # d_xyz_max_contrib = d_xyz_max_contrib.reshape(H, W, 3)  # [H*W, 3] -> [H, W, 3]
+
+                # gt_language_feature, language_feature_mask = viewpoint_cam.get_language_feature(language_feature_dir=dataset.lf_path, feature_level=dataset.feature_level)
+                # N = gt_language_feature.shape[1] * gt_language_feature.shape[2] # H*W
                 
-                obj_id = gt_language_feature # [1, H, W], possible values are 0,1,2,3 (len(positives)=3 means no relevant object)
-                obj_mask = language_feature_mask # [1, H, W]
-                obj_id = obj_id.permute(1, 2, 0).reshape(N)  # [N]
-                obj_mask = obj_mask.permute(1, 2, 0).reshape(N)  # [N]
+                # obj_id = gt_language_feature # [1, H, W], possible values are 0,1,2,3 (len(positives)=3 means no relevant object)
+                # obj_mask = language_feature_mask # [1, H, W]
+                # obj_id = obj_id.permute(1, 2, 0).reshape(N)  # [N]
+                # obj_mask = obj_mask.permute(1, 2, 0).reshape(N)  # [N]
                 
-                #create mask to ignore irrelevant object id (3)
-                id_irrelevant = dataset.num_positives  # 3
-                valid_obj_mask = (obj_id >= 0) & (obj_id < id_irrelevant)  # [N]
-                obj_mask = obj_mask & valid_obj_mask  # [N]
-                #set background and irrelevant object id to no relevant object class(3)
-                obj_id[~obj_mask] = id_irrelevant # [N]
-                obj_id = obj_id.reshape(H, W)  # [H, W]
+                # #create mask to ignore irrelevant object id (3)
+                # id_irrelevant = dataset.num_positives  # 3
+                # valid_obj_mask = (obj_id >= 0) & (obj_id < id_irrelevant)  # [N]
+                # obj_mask = obj_mask & valid_obj_mask  # [N]
+                # #set background and irrelevant object id to no relevant object class(3)
+                # obj_id[~obj_mask] = id_irrelevant # [N]
+                # obj_id = obj_id.reshape(H, W)  # [H, W]
 
-                #extract mask for obj_id == 2
-                target_obj_id = 2
-                target_mask = (obj_id == target_obj_id)  # [H, W], bool
-                #extract d_xyz for target obj_id
-                d_xyz_target = d_xyz_max_contrib[target_mask]  # [M, 3]. This is the displacement for gaussians that belong to target obj id = 2
-                if d_xyz_target.shape[0] > 0:
-                    #calculat norm of d_xyz_target
-                    d_xyz_norm = torch.norm(d_xyz_target, dim=1)  # [M]
-                    d_xyz_norm_mean = d_xyz_norm.mean() # scalar
-                    d_xyz_norm_std = torch.std(d_xyz_norm) # scalar
-                    #create KL divergence loss to encourage d_xyz_norm to be close to d_xyz_norm_mean
-                    # Avoid division by zero by adding a small epsilon
-                    epsilon = 1e-8
-                    d_xyz_norm = d_xyz_norm + epsilon
-                    d_xyz_norm_mean = d_xyz_norm_mean + epsilon
+                # #extract mask for obj_id == 2
+                # target_obj_id = 2
+                # target_mask = (obj_id == target_obj_id)  # [H, W], bool
+                # #extract d_xyz for target obj_id
+                # d_xyz_target = d_xyz_max_contrib[target_mask]  # [M, 3]. This is the displacement for gaussians that belong to target obj id = 2
+                # if d_xyz_target.shape[0] > 0:
+                #     #calculat norm of d_xyz_target
+                #     d_xyz_norm = torch.norm(d_xyz_target, dim=1)  # [M]
+                #     d_xyz_norm_mean = d_xyz_norm.mean() # scalar
+                #     d_xyz_norm_std = torch.std(d_xyz_norm) # scalar
+                #     #create KL divergence loss to encourage d_xyz_norm to be close to d_xyz_norm_mean
+                #     # Avoid division by zero by adding a small epsilon
+                #     epsilon = 1e-8
+                #     d_xyz_norm = d_xyz_norm + epsilon
+                #     d_xyz_norm_mean = d_xyz_norm_mean + epsilon
 
-                    # Compute KL-divergence loss
-                    kl_div_loss = torch.sum(d_xyz_norm_mean * torch.log(d_xyz_norm_mean / d_xyz_norm))
-                    if iteration % 100 == 0:
-                        print(f"Iteration {iteration}: KL Divergence Loss for target obj id {target_obj_id}: {kl_div_loss.item()}, Mean Norm: {d_xyz_norm_mean.item()}, Std Dev: {d_xyz_norm_std.item()}, Num Points: {d_xyz_target.shape[0]}")
+                #     # Compute KL-divergence loss
+                #     kl_div_loss = torch.sum(d_xyz_norm_mean * torch.log(d_xyz_norm_mean / d_xyz_norm))
+                #     if iteration % 100 == 0:
+                #         print(f"Iteration {iteration}: KL Divergence Loss for target obj id {target_obj_id}: {kl_div_loss.item()}, Mean Norm: {d_xyz_norm_mean.item()}, Std Dev: {d_xyz_norm_std.item()}, Num Points: {d_xyz_target.shape[0]}")
 
-                    # Weight the KL-divergence loss and add it to the total loss
-                    kl_div_weight = 0.1  # Adjust this weight as needed
-                    loss += kl_div_weight * kl_div_loss
+                #     # Weight the KL-divergence loss and add it to the total loss
+                #     kl_div_weight = 0.1  # Adjust this weight as needed
+                #     loss += kl_div_weight * kl_div_loss
 
 
         loss.backward()
