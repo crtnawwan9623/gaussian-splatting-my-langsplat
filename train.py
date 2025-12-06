@@ -49,7 +49,43 @@ def sum_params_from_optimizer(optimizer):
                 if p is not None:
                     total += p.data.sum().item()
         return total
-def calculate_max_contrib_regularization(max_contrib, delta, viewpoint_cam, dataset):
+def get_warmup_anneal_func(start_iter: int,
+                           peak_iter: int,
+                           end_iter: int,
+                           start_value: float,
+                           peak_value: float,
+                           end_value: float):
+    """
+    Piecewise linear schedule for a scalar weight:
+
+        [0, start_iter)      -> 0 (or start_value if you prefer)
+        [start_iter,peak_iter] -> linear start_value -> peak_value
+        [peak_iter,end_iter]   -> linear peak_value  -> end_value
+        > end_iter             -> end_value
+    """
+    assert 0 <= start_iter <= peak_iter <= end_iter, \
+        "Require 0 <= start_iter <= peak_iter <= end_iter"
+
+    def fn(iteration: int) -> float:
+        it = max(0, iteration)
+
+        if it < start_iter:
+            return 0.0
+
+        if it <= peak_iter:
+            # warmup phase
+            t = (it - start_iter) / max(1, (peak_iter - start_iter))
+            return start_value + t * (peak_value - start_value)
+
+        if it <= end_iter:
+            # anneal phase
+            t = (it - peak_iter) / max(1, (end_iter - peak_iter))
+            return peak_value + t * (end_value - peak_value)
+
+        return end_value
+
+    return fn
+def calculate_max_contrib_regularization(max_contrib, delta, viewpoint_cam, dataset, target_obj_id, use_zero_target=False):
     H, W = max_contrib.shape  # Dimensions of max_contrib
     max_contrib_flat = max_contrib.reshape(-1)  # [H,W] -> [H*W]
     delta_max_contrib = delta[max_contrib_flat]  # [H*W, 3]
@@ -72,24 +108,45 @@ def calculate_max_contrib_regularization(max_contrib, delta, viewpoint_cam, data
     obj_id = obj_id.reshape(H, W)  # [H, W]
 
     #extract mask for obj_id == 2
-    target_obj_id = 2
+    #target_obj_id = 2
     target_mask = (obj_id == target_obj_id)  # [H, W], bool
     #extract delta for target obj_id
     delta_target = delta_max_contrib[target_mask]  # [M, 3]. This is the displacement for gaussians that belong to target obj id = 2
     if delta_target.shape[0] > 0:
-        #calculat norm of delta_target
-        delta_norm = torch.norm(delta_target, dim=1)  # [M]
-        delta_norm_mean = delta_norm.mean() # scalar
-        delta_norm_std = torch.std(delta_norm) # scalar
-        #create KL divergence loss to encourage delta_norm to be close to delta_norm_mean
-        # Avoid division by zero by adding a small epsilon
-        epsilon = 1e-8
-        delta_norm = delta_norm + epsilon
-        delta_norm_mean = delta_norm_mean + epsilon
+        # #calculat norm of delta_target
+        # delta_norm = torch.norm(delta_target, dim=1)  # [M]
+        # delta_norm_mean = delta_norm.mean() # scalar
+        # #delta_norm_std = torch.std(delta_norm) # scalar
+        # #create KL divergence loss to encourage delta_norm to be close to delta_norm_mean
+        # # Avoid division by zero by adding a small epsilon
+        # epsilon = 1e-8
+        # scale = delta_norm.max() + epsilon
+        # delta_norm = delta_norm / scale
+        # delta_norm_mean = delta_norm_mean / scale
+        # if use_zero_target:
+        #     delta_norm_mean = epsilon  # set target to a small value close to zero
+        # # Compute KL-divergence loss
+        # kl_div_loss = torch.sum(delta_norm_mean * torch.log(delta_norm_mean / delta_norm))
+        # return kl_div_loss
 
-        # Compute KL-divergence loss
-        kl_div_loss = torch.sum(delta_norm_mean * torch.log(delta_norm_mean / delta_norm))
-        return kl_div_loss
+        # Use simple L2 loss on delta_target
+        if use_zero_target:
+            target = torch.zeros_like(delta_target.mean(dim=0))   # [3]
+        else:
+            #target = delta_target.mean(dim=0)   # [3]
+            target = delta_target.mean(dim=0).detach()   # [3], detach to avoid affecting mean calculation
+        
+        # -------- normalization block --------
+        eps = 1e-8
+        # global scale: max abs value over all selected deltas + target
+        max_val = torch.max(delta_target.abs().max(), target.abs().max())
+        scale = max_val + eps
+        delta_target_norm = delta_target / scale
+        target_norm = target / scale
+        # ------------------------------------
+
+        reg_loss = torch.mean((delta_target_norm - target_norm) ** 2)
+        return reg_loss
     else:
         return 0.0
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
@@ -147,6 +204,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     smooth_term = get_linear_noise_func(lr_init=0.1, lr_final=1e-15, lr_delay_mult=0.01, max_steps=20000)
+    reg_weight_fn = get_warmup_anneal_func(
+        start_iter=10000,              # when to start turning it on
+        peak_iter=20000,       # when it reaches max weight
+        end_iter=30000,            # when to reach final value
+        start_value=0.0,                     # value at start_iter
+        peak_value=0.2,                     # max weight (current constant)
+        end_value=0.0                       # or 0.0 if you want it to decay back
+    )
     first_iter += 1
     for iteration in range(first_iter, opt.iterations + 1):
         if network_gui.conn == None:
@@ -214,6 +279,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             image *= alpha_mask
 
         # Loss
+        loss_without_reg = 0.0
         if opt.include_feature:
             gt_language_feature, language_feature_mask = viewpoint_cam.get_language_feature(language_feature_dir=dataset.lf_path, feature_level=dataset.feature_level)
             #Ll1 = l1_loss(language_feature*language_feature_mask, gt_language_feature*language_feature_mask)
@@ -281,59 +347,34 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 Ll1depth = 0
             
             if opt.include_max_contrib and iteration > opt.regularize_max_contrib_after_iter and iteration > opt.warm_up:
-                d_xyz_reg_loss = calculate_max_contrib_regularization(max_contrib, d_xyz, viewpoint_cam, dataset)
-                d_rotation_reg_loss = calculate_max_contrib_regularization(max_contrib, d_rotation, viewpoint_cam, dataset)
-                d_scaling_reg_loss = calculate_max_contrib_regularization(max_contrib, d_scaling, viewpoint_cam, dataset)
-                reg_loss = d_xyz_reg_loss + d_rotation_reg_loss + d_scaling_reg_loss
-                kl_div_weight = 0.1  # Adjust this weight as needed
-                loss += kl_div_weight * reg_loss
+                d_xyz_reg_loss_2 = calculate_max_contrib_regularization(max_contrib, d_xyz, viewpoint_cam, dataset, target_obj_id=2)
+                d_rotation_reg_loss_2 = calculate_max_contrib_regularization(max_contrib, d_rotation, viewpoint_cam, dataset, target_obj_id=2)
+                d_scaling_reg_loss_2 = calculate_max_contrib_regularization(max_contrib, d_scaling, viewpoint_cam, dataset, target_obj_id=2,use_zero_target=True)
+                reg_loss_2 = d_xyz_reg_loss_2 + d_rotation_reg_loss_2 + d_scaling_reg_loss_2
 
-                # # gather d_xyz [N,3] for all gaussians in max_contrib [H,W]
-                # H, W = max_contrib.shape  # Dimensions of max_contrib
-                # max_contrib_flat = max_contrib.reshape(-1)  # [H,W] -> [H*W]
-                # d_xyz_max_contrib = d_xyz[max_contrib_flat]  # [H*W, 3]
-                # d_xyz_max_contrib = d_xyz_max_contrib.reshape(H, W, 3)  # [H*W, 3] -> [H, W, 3]
+                d_xyz_reg_loss_1 = calculate_max_contrib_regularization(max_contrib, d_xyz, viewpoint_cam, dataset, target_obj_id=1, use_zero_target=True)
+                d_rotation_reg_loss_1 = calculate_max_contrib_regularization(max_contrib, d_rotation, viewpoint_cam, dataset, target_obj_id=1, use_zero_target=True)
+                d_scaling_reg_loss_1 = calculate_max_contrib_regularization(max_contrib, d_scaling, viewpoint_cam, dataset, target_obj_id=1,use_zero_target=True)
+                reg_loss_1 = d_xyz_reg_loss_1 + d_rotation_reg_loss_1 + d_scaling_reg_loss_1
 
-                # gt_language_feature, language_feature_mask = viewpoint_cam.get_language_feature(language_feature_dir=dataset.lf_path, feature_level=dataset.feature_level)
-                # N = gt_language_feature.shape[1] * gt_language_feature.shape[2] # H*W
+                d_xyz_reg_loss_0 = calculate_max_contrib_regularization(max_contrib, d_xyz, viewpoint_cam, dataset, target_obj_id=0, use_zero_target=True)
+                d_rotation_reg_loss_0 = calculate_max_contrib_regularization(max_contrib, d_rotation, viewpoint_cam, dataset, target_obj_id=0, use_zero_target=True)
+                d_scaling_reg_loss_0 = calculate_max_contrib_regularization(max_contrib, d_scaling, viewpoint_cam, dataset, target_obj_id=0,use_zero_target=True)
+                reg_loss_0 = d_xyz_reg_loss_0 + d_rotation_reg_loss_0 + d_scaling_reg_loss_0
+
+                reg_loss_wegith_2 = 0.6
+                reg_loss_wegith_1 = 0.2
+                reg_loss_wegith_0 = 0.2
+                #reg_loss_2 + reg_loss_1 + reg_loss_0
+                reg_loss = reg_loss_wegith_2 * reg_loss_2 + reg_loss_wegith_1 * reg_loss_1 + reg_loss_wegith_0 * reg_loss_0
+
+                reg_weight = reg_weight_fn(iteration)
+                loss_without_reg = loss.detach()
+                loss = (1.0 - reg_weight) * loss + reg_weight * reg_loss
                 
-                # obj_id = gt_language_feature # [1, H, W], possible values are 0,1,2,3 (len(positives)=3 means no relevant object)
-                # obj_mask = language_feature_mask # [1, H, W]
-                # obj_id = obj_id.permute(1, 2, 0).reshape(N)  # [N]
-                # obj_mask = obj_mask.permute(1, 2, 0).reshape(N)  # [N]
-                
-                # #create mask to ignore irrelevant object id (3)
-                # id_irrelevant = dataset.num_positives  # 3
-                # valid_obj_mask = (obj_id >= 0) & (obj_id < id_irrelevant)  # [N]
-                # obj_mask = obj_mask & valid_obj_mask  # [N]
-                # #set background and irrelevant object id to no relevant object class(3)
-                # obj_id[~obj_mask] = id_irrelevant # [N]
-                # obj_id = obj_id.reshape(H, W)  # [H, W]
-
-                # #extract mask for obj_id == 2
-                # target_obj_id = 2
-                # target_mask = (obj_id == target_obj_id)  # [H, W], bool
-                # #extract d_xyz for target obj_id
-                # d_xyz_target = d_xyz_max_contrib[target_mask]  # [M, 3]. This is the displacement for gaussians that belong to target obj id = 2
-                # if d_xyz_target.shape[0] > 0:
-                #     #calculat norm of d_xyz_target
-                #     d_xyz_norm = torch.norm(d_xyz_target, dim=1)  # [M]
-                #     d_xyz_norm_mean = d_xyz_norm.mean() # scalar
-                #     d_xyz_norm_std = torch.std(d_xyz_norm) # scalar
-                #     #create KL divergence loss to encourage d_xyz_norm to be close to d_xyz_norm_mean
-                #     # Avoid division by zero by adding a small epsilon
-                #     epsilon = 1e-8
-                #     d_xyz_norm = d_xyz_norm + epsilon
-                #     d_xyz_norm_mean = d_xyz_norm_mean + epsilon
-
-                #     # Compute KL-divergence loss
-                #     kl_div_loss = torch.sum(d_xyz_norm_mean * torch.log(d_xyz_norm_mean / d_xyz_norm))
-                #     if iteration % 100 == 0:
-                #         print(f"Iteration {iteration}: KL Divergence Loss for target obj id {target_obj_id}: {kl_div_loss.item()}, Mean Norm: {d_xyz_norm_mean.item()}, Std Dev: {d_xyz_norm_std.item()}, Num Points: {d_xyz_target.shape[0]}")
-
-                #     # Weight the KL-divergence loss and add it to the total loss
-                #     kl_div_weight = 0.1  # Adjust this weight as needed
-                #     loss += kl_div_weight * kl_div_loss
+                if iteration % 1000 == 0:
+                    print(f"reg_weight: {reg_weight}")
+                    print(f"Iteration {iteration}: Max Contrib Regularization Loss: {reg_loss.item()}, loss_without_reg: {loss_without_reg.item()}")
 
 
         loss.backward()
@@ -357,7 +398,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Log and save
             if opt.include_feature:
                 mlp_model.mlp.eval()
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), 
+            training_report(tb_writer, iteration, Ll1, loss_without_reg, loss, l1_loss, iter_start.elapsed_time(iter_end), 
 							testing_iterations, scene, render, (pipe, background, opt, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset, deform,
 							dataset.load2gpu_on_the_fly, mlp_model)
             if opt.include_feature:
@@ -441,11 +482,12 @@ def prepare_output_and_logger(args):
         print("Tensorboard not available: not logging progress")
     return tb_writer
 
-def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, 
+def training_report(tb_writer, iteration, Ll1, loss_without_reg, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, 
 					renderArgs, dataset, deform, load2gpu_on_the_fly, mlp_model):
     opt = renderArgs[2]
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
+        tb_writer.add_scalar('train_loss_patches/loss_without_reg', loss_without_reg.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
         tb_writer.add_scalar('iter_time', elapsed, iteration)
 
@@ -535,7 +577,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000, 40_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument('--disable_viewer', action='store_true', default=False)
-    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[10_000, 41_000])
+    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[5_000, 6_000, 10_000, 15_000, 20_000, 41_000])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
