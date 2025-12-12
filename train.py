@@ -86,10 +86,12 @@ def get_warmup_anneal_func(start_iter: int,
 
     return fn
 def calculate_max_contrib_regularization(max_contrib, delta, viewpoint_cam, dataset, target_obj_id, use_zero_target=False):
-    H, W = max_contrib.shape  # Dimensions of max_contrib
-    max_contrib_flat = max_contrib.reshape(-1)  # [H,W] -> [H*W]
-    delta_max_contrib = delta[max_contrib_flat]  # [H*W, 3]
-    delta_max_contrib = delta_max_contrib.reshape(H, W, -1)  # [H*W, 3] -> [H, W, 3]
+    K, H, W = max_contrib.shape  # Dimensions of max_contrib, K=NUM_MAX_CONTRIBUTORS
+    valid_max_contrib_mask = max_contrib >= 0  # [K, H, W], bool
+
+    max_contrib_flat = max_contrib.reshape(-1)  # [K, H, W] -> [K*H*W]
+    delta_max_contrib = delta[max_contrib_flat]  # [K*H*W, 3]
+    delta_max_contrib = delta_max_contrib.reshape(K, H, W, -1)  # [K, H, W, 3]
 
     gt_language_feature, language_feature_mask = viewpoint_cam.get_language_feature(language_feature_dir=dataset.lf_path, feature_level=dataset.feature_level)
     N = gt_language_feature.shape[1] * gt_language_feature.shape[2] # H*W
@@ -111,24 +113,17 @@ def calculate_max_contrib_regularization(max_contrib, delta, viewpoint_cam, data
     #target_obj_id = 2
     target_mask = (obj_id == target_obj_id)  # [H, W], bool
     #extract delta for target obj_id
-    delta_target = delta_max_contrib[target_mask]  # [M, 3]. This is the displacement for gaussians that belong to target obj id = 2
-    if delta_target.shape[0] > 0:
-        # #calculat norm of delta_target
-        # delta_norm = torch.norm(delta_target, dim=1)  # [M]
-        # delta_norm_mean = delta_norm.mean() # scalar
-        # #delta_norm_std = torch.std(delta_norm) # scalar
-        # #create KL divergence loss to encourage delta_norm to be close to delta_norm_mean
-        # # Avoid division by zero by adding a small epsilon
-        # epsilon = 1e-8
-        # scale = delta_norm.max() + epsilon
-        # delta_norm = delta_norm / scale
-        # delta_norm_mean = delta_norm_mean / scale
-        # if use_zero_target:
-        #     delta_norm_mean = epsilon  # set target to a small value close to zero
-        # # Compute KL-divergence loss
-        # kl_div_loss = torch.sum(delta_norm_mean * torch.log(delta_norm_mean / delta_norm))
-        # return kl_div_loss
+    #delta_target = delta_max_contrib[target_mask]  # [M, 3]. This is the displacement for gaussians that belong to target obj id = 2
 
+    delta_target = delta_max_contrib[:, target_mask, :]   # [K, M, 3]
+    delta_target = delta_target.reshape(-1, delta_target.shape[-1])  # [K*M, 3]
+
+    valid_delta_mask = valid_max_contrib_mask[:, target_mask]  # [K, M], bool
+    valid_delta_mask = valid_delta_mask.reshape(-1)        # [K*M], bool
+
+    delta_target = delta_target[valid_delta_mask]         # [N_valid, 3]
+
+    if delta_target.shape[0] > 0:
         # Use simple L2 loss on delta_target
         if use_zero_target:
             target = torch.zeros_like(delta_target.mean(dim=0))   # [3]
@@ -210,7 +205,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         end_iter=30000,            # when to reach final value
         start_value=0.0,                     # value at start_iter
         peak_value=0.2,                     # max weight (current constant)
-        end_value=0.0                       # or 0.0 if you want it to decay back
+        end_value=0.02                       # or 0.0 if you want it to decay back
     )
     first_iter += 1
     for iteration in range(first_iter, opt.iterations + 1):
@@ -279,7 +274,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             image *= alpha_mask
 
         # Loss
-        loss_without_reg = 0.0
+        loss_without_reg = torch.tensor(0.0, device="cuda")
         if opt.include_feature:
             gt_language_feature, language_feature_mask = viewpoint_cam.get_language_feature(language_feature_dir=dataset.lf_path, feature_level=dataset.feature_level)
             #Ll1 = l1_loss(language_feature*language_feature_mask, gt_language_feature*language_feature_mask)
@@ -307,7 +302,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             assert obj_id.min() >= 0 and obj_id.max() < obj_id_distribution.shape[1]
 
             #print total number of '2' in obj_id and also number of points in obj_id_distribution with max prob for class 2
-            if iteration % 100 == 0:
+            if iteration % 1000 == 0:
                 #num_obj_2 = (obj_id == 2).sum().item()
                 max_prob_obj_2 = (obj_id_distribution.argmax(dim=1) == 2).sum().item()
                 max_prob_obj_1 = (obj_id_distribution.argmax(dim=1) == 1).sum().item()
@@ -352,21 +347,21 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 d_scaling_reg_loss_2 = calculate_max_contrib_regularization(max_contrib, d_scaling, viewpoint_cam, dataset, target_obj_id=2,use_zero_target=True)
                 reg_loss_2 = d_xyz_reg_loss_2 + d_rotation_reg_loss_2 + d_scaling_reg_loss_2
 
-                d_xyz_reg_loss_1 = calculate_max_contrib_regularization(max_contrib, d_xyz, viewpoint_cam, dataset, target_obj_id=1, use_zero_target=True)
-                d_rotation_reg_loss_1 = calculate_max_contrib_regularization(max_contrib, d_rotation, viewpoint_cam, dataset, target_obj_id=1, use_zero_target=True)
-                d_scaling_reg_loss_1 = calculate_max_contrib_regularization(max_contrib, d_scaling, viewpoint_cam, dataset, target_obj_id=1,use_zero_target=True)
-                reg_loss_1 = d_xyz_reg_loss_1 + d_rotation_reg_loss_1 + d_scaling_reg_loss_1
+                # d_xyz_reg_loss_1 = calculate_max_contrib_regularization(max_contrib, d_xyz, viewpoint_cam, dataset, target_obj_id=1, use_zero_target=True)
+                # d_rotation_reg_loss_1 = calculate_max_contrib_regularization(max_contrib, d_rotation, viewpoint_cam, dataset, target_obj_id=1, use_zero_target=True)
+                # d_scaling_reg_loss_1 = calculate_max_contrib_regularization(max_contrib, d_scaling, viewpoint_cam, dataset, target_obj_id=1,use_zero_target=True)
+                # reg_loss_1 = d_xyz_reg_loss_1 + d_rotation_reg_loss_1 + d_scaling_reg_loss_1
 
-                d_xyz_reg_loss_0 = calculate_max_contrib_regularization(max_contrib, d_xyz, viewpoint_cam, dataset, target_obj_id=0, use_zero_target=True)
-                d_rotation_reg_loss_0 = calculate_max_contrib_regularization(max_contrib, d_rotation, viewpoint_cam, dataset, target_obj_id=0, use_zero_target=True)
-                d_scaling_reg_loss_0 = calculate_max_contrib_regularization(max_contrib, d_scaling, viewpoint_cam, dataset, target_obj_id=0,use_zero_target=True)
-                reg_loss_0 = d_xyz_reg_loss_0 + d_rotation_reg_loss_0 + d_scaling_reg_loss_0
+                # d_xyz_reg_loss_0 = calculate_max_contrib_regularization(max_contrib, d_xyz, viewpoint_cam, dataset, target_obj_id=0, use_zero_target=True)
+                # d_rotation_reg_loss_0 = calculate_max_contrib_regularization(max_contrib, d_rotation, viewpoint_cam, dataset, target_obj_id=0, use_zero_target=True)
+                # d_scaling_reg_loss_0 = calculate_max_contrib_regularization(max_contrib, d_scaling, viewpoint_cam, dataset, target_obj_id=0,use_zero_target=True)
+                # reg_loss_0 = d_xyz_reg_loss_0 + d_rotation_reg_loss_0 + d_scaling_reg_loss_0
 
-                reg_loss_wegith_2 = 0.6
-                reg_loss_wegith_1 = 0.2
-                reg_loss_wegith_0 = 0.2
-                #reg_loss_2 + reg_loss_1 + reg_loss_0
-                reg_loss = reg_loss_wegith_2 * reg_loss_2 + reg_loss_wegith_1 * reg_loss_1 + reg_loss_wegith_0 * reg_loss_0
+                #reg_loss_wegith_2 = 0.6
+                #reg_loss_wegith_1 = 0.2
+                #reg_loss_wegith_0 = 0.2
+                #reg_loss = reg_loss_wegith_2 * reg_loss_2 + reg_loss_wegith_1 * reg_loss_1 + reg_loss_wegith_0 * reg_loss_0
+                reg_loss = reg_loss_2
 
                 reg_weight = reg_weight_fn(iteration)
                 loss_without_reg = loss.detach()
@@ -375,6 +370,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if iteration % 1000 == 0:
                     print(f"reg_weight: {reg_weight}")
                     print(f"Iteration {iteration}: Max Contrib Regularization Loss: {reg_loss.item()}, loss_without_reg: {loss_without_reg.item()}")
+                    #print number of -1 in max_contrib
+                    num_neg1 = (max_contrib == -1).sum().item()
+                    print(f"Iteration {iteration}: Number of -1 in max_contrib: {num_neg1}")
 
 
         loss.backward()
@@ -577,7 +575,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000, 40_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument('--disable_viewer', action='store_true', default=False)
-    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[5_000, 6_000, 10_000, 15_000, 20_000, 41_000])
+    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[5_000, 6_000, 10_000, 15_000, 20_000, 40_000, 60_000, 80_000])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
