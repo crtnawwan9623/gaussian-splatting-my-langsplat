@@ -15,6 +15,7 @@ import numpy as np
 from utils.graphics_utils import getWorld2View2, getProjectionMatrix
 from utils.general_utils import PILtoTorch
 import cv2
+from PIL import Image
 
 class Camera(nn.Module):
     def __init__(self, resolution, colmap_id, R, T, FoVx, FoVy, depth_params, image, invdepthmap,
@@ -38,7 +39,7 @@ class Camera(nn.Module):
             print(e)
             print(f"[Warning] Custom device {data_device} failed, fallback to default cuda device" )
             self.data_device = torch.device("cuda")
-
+        self.resolution = resolution
         resized_image_rgb = PILtoTorch(image, resolution)
         gt_image = resized_image_rgb[:3, ...]
         self.alpha_mask = None
@@ -92,7 +93,11 @@ class Camera(nn.Module):
         #language_feature_name = os.path.join(language_feature_dir, self.image_name)
         image_name_without_ext = os.path.splitext(self.image_name)[0]
         language_feature_name = os.path.join(language_feature_dir, image_name_without_ext)
-        seg_map = torch.from_numpy(np.load(language_feature_name + '_s.npy'))
+        #seg_map = torch.from_numpy(np.load(language_feature_name + '_s.npy'))
+        seg_map_numpy = np.load(language_feature_name + '_s.npy').astype(np.int32)
+        seg_map = self._resize_seg_to_torch(seg_map_numpy, self.resolution)
+        #print shape of seg_map
+        #print ("resized language feature seg_map shape:", seg_map.shape)
         feature_map = torch.from_numpy(np.load(language_feature_name + '_f.npy'))
         
         # elif str(language_feature_name).split('.')[-1] == 'pkl':
@@ -144,6 +149,20 @@ class Camera(nn.Module):
         self.full_proj_transform = self.full_proj_transform.to(data_device)
         self.camera_center = self.camera_center.to(data_device)
         self.fid = self.fid.to(data_device)
+    def _resize_seg_to_torch(self, seg_map_numpy, resolution):
+        resized_channels = []
+        # seg_map_numpy is expected to be (C, H, W)
+        for i in range(seg_map_numpy.shape[0]):
+            # Convert each channel to a PIL image
+            # Use a mode that supports integer data without scaling, like 'I' for 32-bit signed integer
+            pil_image = Image.fromarray(seg_map_numpy[i], mode='I')
+            # Resize with NEAREST to preserve index values
+            resized_pil = pil_image.resize(resolution, Image.NEAREST)
+            # Convert back to numpy array
+            resized_numpy = np.array(resized_pil)
+            resized_channels.append(resized_numpy)
+        # Stack channels back together and convert to a tensor
+        return torch.from_numpy(np.stack(resized_channels, axis=0)) 
 
 
 class MiniCam:

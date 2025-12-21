@@ -203,9 +203,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         start_iter=10000,              # when to start turning it on
         peak_iter=20000,       # when it reaches max weight
         end_iter=30000,            # when to reach final value
-        start_value=0.0,                     # value at start_iter
-        peak_value=0.2,                     # max weight (current constant)
-        end_value=0.02                       # or 0.0 if you want it to decay back
+        start_value=0.05,                     # value at start_iter
+        peak_value=0.05,                     # max weight (current constant)
+        end_value=0.05                       # or 0.0 if you want it to decay back
     )
     first_iter += 1
     for iteration in range(first_iter, opt.iterations + 1):
@@ -430,11 +430,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gaussians.optimizer.zero_grad(set_to_none = True)
             else:
                 param_sum = sum_params_from_optimizer(gaussians.optimizer)
-                print(f"Gaussians parameter sum before step: {param_sum}") if iteration % 100 == 0 else None
+                #print(f"Gaussians parameter sum before step: {param_sum}") if iteration % 100 == 0 else None
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
                 param_sum = sum_params_from_optimizer(gaussians.optimizer)
-                print(f"Gaussians parameter sum after step: {param_sum}") if iteration % 100 == 0 else None
+                #print(f"Gaussians parameter sum after step: {param_sum}") if iteration % 100 == 0 else None
 
                 if not opt.include_feature:
                     deform.optimizer.step()
@@ -444,11 +444,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if opt.include_feature and iteration >= freeze_mlp_until_iter and iteration < freeze_mlp_after_iter:
                     # calculate pre_sum of mlp_model parameters for debugging
                     param_sum = sum_params_from_optimizer(mlp_model.optimizer)
-                    print(f"MLP model parameter sum before step: {param_sum}") if iteration % 100 == 0 else None
+                    #print(f"MLP model parameter sum before step: {param_sum}") if iteration % 100 == 0 else None
                     mlp_model.optimizer.step()
                     mlp_model.optimizer.zero_grad()
                     param_sum = sum_params_from_optimizer(mlp_model.optimizer)
-                    print(f"MLP model parameter sum after step: {param_sum}") if iteration % 100 == 0 else None
+                    #print(f"MLP model parameter sum after step: {param_sum}") if iteration % 100 == 0 else None
 
         if (iteration in checkpoint_iterations) or (iteration == opt.iterations):
             print("\n[ITER {}] Saving Checkpoint".format(iteration))

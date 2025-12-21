@@ -30,13 +30,14 @@ except:
     SPARSE_ADAM_AVAILABLE = False
 
 
-def render_mytime(model_path, source_path, name, iteration, views, gaussians, pipeline, background, train_test_exp, separate_sh, args, load2gpu_on_the_fly, is_6dof, deform, mlp_model):
+def render_mytime(model_path, source_path, name, iteration, views, gaussians, pipeline, background, train_test_exp, separate_sh, args, load2gpu_on_the_fly, is_6dof, deform, mlp_model, dataset):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
 
     makedirs(render_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
     renderings = []
+    renderings_obj_2 = []
     to8b = lambda x: (255 * np.clip(x, 0, 1)).astype(np.uint8)
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         if load2gpu_on_the_fly:
@@ -47,49 +48,39 @@ def render_mytime(model_path, source_path, name, iteration, views, gaussians, pi
         d_xyz, d_rotation, d_scaling = deform.step(xyz.detach(), time_input)
         output = render(view, gaussians, d_xyz, d_rotation, d_scaling, is_6dof, pipeline, background, args, use_trained_exp=train_test_exp, separate_sh=separate_sh)
         
-        if not args.include_feature:
-            rendering = output["render"]
-        else:
-            rendering = output["language_feature_image"]  #[3,H,W]
+        
+        image = output["render"] #[3,H,W]
+        language_feature = output["language_feature_image"]  #[3,H,W]
 
-        if not args.include_feature:
-            gt = view.original_image[0:3, :, :]
-            if args.train_test_exp:
-                rendering = rendering[..., rendering.shape[-1] // 2:]
-                gt = gt[..., gt.shape[-1] // 2:]
-        else:
-            gt, mask = view.get_language_feature(os.path.join(source_path, args.language_features_name), feature_level=args.feature_level)
-
-        if args.include_feature:
-            language_feature_reshaped = rendering.permute(1, 2, 0).reshape(-1, 3) # [N,3]
-            obj_id_distribution = mlp_model.step(language_feature_reshaped) # [N,3] -> [N,4] (3 is latent embeedding, 4 is number of classes including no relevant object)
-            obj_id_prob, obj_id= obj_id_distribution.max(dim=1) #[N,4] -> [N], obj_id in [0,1,2,3], 3 means no relevant object
-            obj_mask = mask.permute(1, 2, 0).reshape(-1)  # [N], mask to remove background point (i.e., background points are 0 in mask)
-            num_of_classes = obj_id_distribution.shape[1] #4 = number of positives + 1 (no relevant object)
-            #obj_id[~obj_mask] = num_of_classes - 1  # [N], set background points to "no relevant object" class (i.e., 3)
-            rendering = obj_id.reshape(rendering.shape[1], rendering.shape[2])[None, :, :].float()  # [1,H,W]
-            # Normalize rendering to [0, 1], the max value is num_of_classes -1
-            rendering = rendering / (num_of_classes - 1)
-
-            #process gt with the mask to set background points to "no relevant object" class (i.e., 3)
-            #gt = gt * mask + (num_of_classes - 1) * (~mask)  # [1,H,W]
-            gt = gt.float() / (num_of_classes - 1)  # normalize gt to [0,1]
+        gt = view.original_image[0:3, :, :]
+        if args.train_test_exp:
+            image = image[..., image.shape[-1] // 2:]
+            gt = gt[..., gt.shape[-1] // 2:]
 
 
-            # language_feature_reshaped = rendering.permute(1, 2, 0).reshape(N, 3) # [N,3]
-            # obj_id_distribution = mlp_model.step(language_feature_reshaped) # [N,3] -> [N,3] (the 1st 3 is latent embeedding, the 2nd 3 is number of objects )
-            # obj_id_prob, obj_id= obj_id_distribution.max(dim=1) #[N,3] -> [N]
-            # obj_mask = mask.permute(1, 2, 0).reshape(N)  # [N], mask to remove background point (i.e., no mask point)
-            # #valid_mask = obj_id_prob > 0.5 # threshold to remove irrrelevant postive id
-            # obj_id *= obj_mask 
+        N = language_feature.shape[1] * language_feature.shape[2]
+        language_feature_reshaped = language_feature.permute(1, 2, 0).reshape(N, -1)
+        obj_id_distribution = mlp_model.step(language_feature_reshaped) # [N,3] -> [N,4] (3 is latent embeedding, 4 is number of classes including no relevant object)
+        obj_id_prob, obj_id= obj_id_distribution.max(dim=1) #[N,4] -> [N], obj_id in [0,1,2,3], 3 means no relevant object
+        obj_id = obj_id.reshape(language_feature.shape[1], language_feature.shape[2]) # [H,W]
+        mask_obj_2 = (obj_id == 2) # mask for object id 2 [H,W]
+        # Clone image and set non-object-2 pixels to white
+        image_obj_2 = image.clone()
+        mask_broadcast = ~mask_obj_2.unsqueeze(0).expand_as(image)  # [3,H,W]
+        image_obj_2[mask_broadcast] = 1.0
+        
 
-        torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
+
+        torchvision.utils.save_image(image, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
-        renderings.append(to8b(rendering.cpu().numpy()))
+        renderings.append(to8b(image.cpu().numpy()))
+        renderings_obj_2.append(to8b(image_obj_2.cpu().numpy()))
     renderings = np.stack(renderings, 0).transpose(0,2,3,1)
-    imageio.mimwrite(os.path.join(render_path, 'mytime_video.mp4'), renderings, fps=30, quality=8)    
+    imageio.mimwrite(os.path.join(render_path, 'mytime_video.mp4'), renderings, fps=30, quality=8)
+    renderings_obj_2 = np.stack(renderings_obj_2, 0).transpose(0,2,3,1)
+    imageio.mimwrite(os.path.join(render_path, 'mytime_video_obj_2.mp4'), renderings_obj_2, fps=30, quality=8)    
 
-def render_set(model_path, source_path, name, iteration, views, gaussians, pipeline, background, train_test_exp, separate_sh, args, load2gpu_on_the_fly, is_6dof, deform, mlp_model):
+def render_set(model_path, source_path, name, iteration, views, gaussians, pipeline, background, train_test_exp, separate_sh, args, load2gpu_on_the_fly, is_6dof, deform, mlp_model, dataset):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
 
@@ -115,21 +106,21 @@ def render_set(model_path, source_path, name, iteration, views, gaussians, pipel
                 rendering = rendering[..., rendering.shape[-1] // 2:]
                 gt = gt[..., gt.shape[-1] // 2:]
         else:
-            gt, mask = view.get_language_feature(os.path.join(source_path, args.language_features_name), feature_level=args.feature_level)
+            gt, mask = view.get_language_feature(language_feature_dir=dataset.lf_path, feature_level=dataset.feature_level)
 
         if args.include_feature:
-            language_feature_reshaped = rendering.permute(1, 2, 0).reshape(-1, 3) # [N,3]
+            N = rendering.shape[1] * rendering.shape[2]
+            language_feature_reshaped = rendering.permute(1, 2, 0).reshape(N, -1)
             obj_id_distribution = mlp_model.step(language_feature_reshaped) # [N,3] -> [N,4] (3 is latent embeedding, 4 is number of classes including no relevant object)
             obj_id_prob, obj_id= obj_id_distribution.max(dim=1) #[N,4] -> [N], obj_id in [0,1,2,3], 3 means no relevant object
-            obj_mask = mask.permute(1, 2, 0).reshape(-1)  # [N], mask to remove background point (i.e., background points are 0 in mask)
+
             num_of_classes = obj_id_distribution.shape[1] #4 = number of positives + 1 (no relevant object)
-            #obj_id[~obj_mask] = num_of_classes - 1  # [N], set background points to "no relevant object" class (i.e., 3)
             rendering = obj_id.reshape(rendering.shape[1], rendering.shape[2])[None, :, :].float()  # [1,H,W]
             # Normalize rendering to [0, 1], the max value is num_of_classes -1
             rendering = rendering / (num_of_classes - 1)
 
             #process gt with the mask to set background points to "no relevant object" class (i.e., 3)
-            #gt = gt * mask + (num_of_classes - 1) * (~mask)  # [1,H,W]
+            gt = gt * mask + (num_of_classes - 1) * (~mask)  # [1,H,W]
             gt = gt.float() / (num_of_classes - 1)  # normalize gt to [0,1]
 
 
@@ -370,14 +361,14 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
         gaussians = GaussianModel(dataset.sh_degree)
         #scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
         scene = Scene(dataset, gaussians, shuffle=False)
-        checkpoint = os.path.join(args.model_path, 'chkpnt80010.pth')
+        checkpoint = os.path.join(args.model_path, 'chkpnt80000-lang.pth')
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, args, dataset, mode='test')
         deform = DeformModel(dataset.is_blender, dataset.is_6dof)
         deform.load_weights(dataset.model_path)
         mlp_model = None
         if args.include_feature:
-            mlp_model = MlpModel()
+            mlp_model = MlpModel(input_size=dataset.langauge_feautre_dim, output_size=4)
             mlp_model.load_weights(dataset.model_path)
 
         bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
@@ -399,10 +390,10 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
             render_func = interpolate_all
         if not skip_train and scene.getTrainCameras():
              #render_set(dataset.model_path, dataset.source_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, dataset.train_test_exp, separate_sh, args, dataset.load2gpu_on_the_fly, dataset.is_6dof, deform)
-            render_func(dataset.model_path, dataset.source_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, dataset.train_test_exp, separate_sh, args, dataset.load2gpu_on_the_fly, dataset.is_6dof, deform, mlp_model)
+            render_func(dataset.model_path, dataset.source_path, args.mode, scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, dataset.train_test_exp, separate_sh, args, dataset.load2gpu_on_the_fly, dataset.is_6dof, deform, mlp_model, dataset)
         if not skip_test and scene.getTestCameras():
              #render_set(dataset.model_path, dataset.source_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, dataset.train_test_exp, separate_sh, args, dataset.load2gpu_on_the_fly, dataset.is_6dof, deform)
-             render_func(dataset.model_path, dataset.source_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, dataset.train_test_exp, separate_sh, args, dataset.load2gpu_on_the_fly, dataset.is_6dof, deform, mlp_model)
+             render_func(dataset.model_path, dataset.source_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, dataset.train_test_exp, separate_sh, args, dataset.load2gpu_on_the_fly, dataset.is_6dof, deform, mlp_model, dataset)
 
 if __name__ == "__main__":
     # Set up command line argument parser
@@ -416,7 +407,7 @@ if __name__ == "__main__":
     parser.add_argument("--include_feature", action="store_true")
     parser.add_argument("--include_max_contrib", action="store_true")
     parser.add_argument("--mode", default='render', choices=['render', 'time', 'view', 'all', 'pose', 'original', 'mytime', 'myview'])
-    #parser.add_argument("--language_features_name", type=str, default="language_features.npy", help
+    #parser.add_argument("--language_features_name", type=str, default="language_features.npy")
 
     args = get_combined_args(parser)
     print("Rendering " + args.model_path)
