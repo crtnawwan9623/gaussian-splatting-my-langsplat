@@ -119,6 +119,7 @@ class OptimizationParams(ParamGroup):
         self.random_background = False
         self.optimizer_type = "default"
         self.regularize_max_contrib_after_iter = 10000
+        self.cull_mask_enabled = False
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

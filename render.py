@@ -36,8 +36,10 @@ def render_mytime(model_path, source_path, name, iteration, views, gaussians, pi
 
     makedirs(render_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
-    renderings = []
-    renderings_obj_2 = []
+    render_scene = []
+    render_obj_2 = []
+    render_feature = []
+    render_segmented = []
     to8b = lambda x: (255 * np.clip(x, 0, 1)).astype(np.uint8)
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         if load2gpu_on_the_fly:
@@ -51,11 +53,7 @@ def render_mytime(model_path, source_path, name, iteration, views, gaussians, pi
         
         image = output["render"] #[3,H,W]
         language_feature = output["language_feature_image"]  #[3,H,W]
-
         gt = view.original_image[0:3, :, :]
-        if args.train_test_exp:
-            image = image[..., image.shape[-1] // 2:]
-            gt = gt[..., gt.shape[-1] // 2:]
 
 
         N = language_feature.shape[1] * language_feature.shape[2]
@@ -69,16 +67,166 @@ def render_mytime(model_path, source_path, name, iteration, views, gaussians, pi
         mask_broadcast = ~mask_obj_2.unsqueeze(0).expand_as(image)  # [3,H,W]
         image_obj_2[mask_broadcast] = 1.0
         
+        number_of_class = obj_id_distribution.shape[1] #4
+        feature = obj_id.float()[None, :, :]  # [1,H,W]
+        feature = feature / (number_of_class - 1)
 
+        image_segmented = image.clone()
+        mask_obj_0 = (obj_id == 0)
+        mask_obj_1 = (obj_id == 1)
+        alpha = 0.5
+        # Blend object 0 with red
+        red = torch.tensor([1.0, 0.0, 0.0], device=image_segmented.device).view(3, 1, 1)
+        #mask_broadcast_0 = mask_obj_0.unsqueeze(0).expand_as(image_segmented)
+        image_segmented = torch.where(mask_obj_0, alpha * image_segmented + (1 - alpha) * red, image_segmented)
+        # Blend object 1 with green
+        green = torch.tensor([0.0, 1.0, 0.0], device=image_segmented.device).view(3, 1, 1)
+        #mask_broadcast_1 = mask_obj_1.unsqueeze(0).expand_as(image_segmented)
+        image_segmented = torch.where(mask_obj_1, alpha * image_segmented + (1 - alpha) * green, image_segmented)
+        #Blend object 2 with blue
+        blue = torch.tensor([0.0, 0.0, 1.0], device=image_segmented.device).view(3, 1, 1)
+        #mask_broadcast_2 = mask_obj_2.unsqueeze(0).expand_as(image_segmented)
+        image_segmented = torch.where(mask_obj_2, alpha * image_segmented + (1 - alpha) * blue, image_segmented)
+
+        # torchvision.utils.save_image(image, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
+        # torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
+        render_scene.append(to8b(image.cpu().numpy()))
+        render_obj_2.append(to8b(image_obj_2.cpu().numpy()))
+        render_feature.append(to8b(feature.cpu().numpy()))
+        render_segmented.append(to8b(image_segmented.cpu().numpy()))
+
+    render_scene = np.stack(render_scene, 0).transpose(0,2,3,1)
+    imageio.mimwrite(os.path.join(render_path, 'render_scene.mp4'), render_scene, fps=30, quality=8)
+    render_obj_2 = np.stack(render_obj_2, 0).transpose(0,2,3,1)
+    imageio.mimwrite(os.path.join(render_path, 'render_obj_2.mp4'), render_obj_2, fps=30, quality=8)
+    render_feature = np.stack(render_feature, 0).transpose(0,2,3,1)
+    imageio.mimwrite(os.path.join(render_path, 'render_feature.mp4'), render_feature, fps=30, quality=8)
+    render_segmented = np.stack(render_segmented, 0).transpose(0,2,3,1)
+    imageio.mimwrite(os.path.join(render_path, 'render_segmented.mp4'), render_segmented, fps=30, quality=8)   
+
+#create myview. It should be same to mytime but only render a single fixed view (middle view in the list)
+def render_myview(model_path, source_path, name, iteration, views, gaussians, pipeline, background, train_test_exp, separate_sh, args, load2gpu_on_the_fly, is_6dof, deform, mlp_model, dataset):
+    render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
+    gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
+
+    view_to_render = views[len(views) // 2]  # Choose the middle view for rendering
+    makedirs(render_path, exist_ok=True)
+    makedirs(gts_path, exist_ok=True)
+    render_scene = []
+    render_obj_2 = []
+    render_feature = []
+    render_segmented = []
+    to8b = lambda x: (255 * np.clip(x, 0, 1)).astype(np.uint8)
+    for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
+        if load2gpu_on_the_fly:
+            view.load2device()
+        fid = view.fid
+        xyz = gaussians.get_xyz
+        time_input = fid.unsqueeze(0).expand(xyz.shape[0], -1)
+        d_xyz, d_rotation, d_scaling = deform.step(xyz.detach(), time_input)
+        output = render(view_to_render, gaussians, d_xyz, d_rotation, d_scaling, is_6dof, pipeline, background, args, use_trained_exp=train_test_exp, separate_sh=separate_sh)
+        
+        
+        image = output["render"] #[3,H,W]
+        language_feature = output["language_feature_image"]  #[3,H,W]
+        gt = view.original_image[0:3, :, :]
+
+
+        N = language_feature.shape[1] * language_feature.shape[2]
+        language_feature_reshaped = language_feature.permute(1, 2, 0).reshape(N, -1)
+        obj_id_distribution = mlp_model.step(language_feature_reshaped) # [N,3] -> [N,4] (3 is latent embeedding, 4 is number of classes including no relevant object)
+        obj_id_prob, obj_id= obj_id_distribution.max(dim=1) #[N,4] -> [N], obj_id in [0,1,2,3], 3 means no relevant object
+        obj_id = obj_id.reshape(language_feature.shape[1], language_feature.shape[2]) # [H,W]
+        mask_obj_2 = (obj_id == 2) # mask for object id 2 [H,W]
+        # Clone image and set non-object-2 pixels to white
+        image_obj_2 = image.clone()
+        mask_broadcast = ~mask_obj_2.unsqueeze(0).expand_as(image)  # [3,H,W]
+        image_obj_2[mask_broadcast] = 1.0
+        
+        number_of_class = obj_id_distribution.shape[1] #4
+        feature = obj_id.float()[None, :, :]  # [1,H,W]
+        feature = feature / (number_of_class - 1)
+
+        image_segmented = image.clone()
+        mask_obj_0 = (obj_id == 0)
+        mask_obj_1 = (obj_id == 1)
+        alpha = 0.5
+        # Blend object 0 with red
+        red = torch.tensor([1.0, 0.0, 0.0], device=image_segmented.device).view(3, 1, 1)
+        #mask_broadcast_0 = mask_obj_0.unsqueeze(0).expand_as(image_segmented)
+        image_segmented = torch.where(mask_obj_0, alpha * image_segmented + (1 - alpha) * red, image_segmented)
+        # Blend object 1 with green
+        green = torch.tensor([0.0, 1.0, 0.0], device=image_segmented.device).view(3, 1, 1)
+        #mask_broadcast_1 = mask_obj_1.unsqueeze(0).expand_as(image_segmented)
+        image_segmented = torch.where(mask_obj_1, alpha * image_segmented + (1 - alpha) * green, image_segmented)
+        #Blend object 2 with blue
+        blue = torch.tensor([0.0, 0.0, 1.0], device=image_segmented.device).view(3, 1, 1)
+        #mask_broadcast_2 = mask_obj_2.unsqueeze(0).expand_as(image_segmented)
+        image_segmented = torch.where(mask_obj_2, alpha * image_segmented + (1 - alpha) * blue, image_segmented)
+
+        # torchvision.utils.save_image(image, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
+        # torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
+        render_scene.append(to8b(image.cpu().numpy()))
+        render_obj_2.append(to8b(image_obj_2.cpu().numpy()))
+        render_feature.append(to8b(feature.cpu().numpy()))
+        render_segmented.append(to8b(image_segmented.cpu().numpy()))
+
+    render_scene = np.stack(render_scene, 0).transpose(0,2,3,1)
+    imageio.mimwrite(os.path.join(render_path, 'render_scene.mp4'), render_scene, fps=30, quality=8)
+    render_obj_2 = np.stack(render_obj_2, 0).transpose(0,2,3,1)
+    imageio.mimwrite(os.path.join(render_path, 'render_obj_2.mp4'), render_obj_2, fps=30, quality=8)
+    render_feature = np.stack(render_feature, 0).transpose(0,2,3,1)
+    imageio.mimwrite(os.path.join(render_path, 'render_feature.mp4'), render_feature, fps=30, quality=8)
+    render_segmented = np.stack(render_segmented, 0).transpose(0,2,3,1)
+    imageio.mimwrite(os.path.join(render_path, 'render_segmented.mp4'), render_segmented, fps=30, quality=8)
+def render_mycull(model_path, source_path, name, iteration, views, gaussians, pipeline, background, train_test_exp, separate_sh, args, load2gpu_on_the_fly, is_6dof, deform, mlp_model, dataset):
+    
+    gaussian_language_feature = gaussians.get_language_feature # [N,16]
+    gaussian_obj_id_distribution = mlp_model.step(gaussian_language_feature) # [N,16] -> [N,4]
+    #gaussian_obj_id_prob, gaussian_obj_id= gaussian_obj_id_distribution.max(dim=1) #[N,4] -> [N], obj_id in [0,1,2,3], 3 means no relevant object
+    #mask_gaussian_obj_2 = (gaussian_obj_id == 2) # mask for object id 2 [N]
+    #calculate probability with softmax
+    gaussian_obj_id_prob = torch.softmax(gaussian_obj_id_distribution, dim=1) # [N,4]
+    mask_gaussian_obj_2 = (gaussian_obj_id_prob[:,2] > 0.3) # mask for object id 2 [N]
+    #print number of selected gaussians
+    print("Number of gaussians selected for object 2: {}/{}".format(mask_gaussian_obj_2.sum().item(), mask_gaussian_obj_2.shape[0]))
+
+
+
+    render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
+    gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
+
+    makedirs(render_path, exist_ok=True)
+    makedirs(gts_path, exist_ok=True)
+    renderings = []
+    gts = []
+    to8b = lambda x: (255 * np.clip(x, 0, 1)).astype(np.uint8)
+    for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
+        if load2gpu_on_the_fly:
+            view.load2device()
+        fid = view.fid
+        xyz = gaussians.get_xyz
+        time_input = fid.unsqueeze(0).expand(xyz.shape[0], -1)
+        d_xyz, d_rotation, d_scaling = deform.step(xyz.detach(), time_input)
+        output = render(view, gaussians, d_xyz, d_rotation, d_scaling, is_6dof, pipeline, background, args, use_trained_exp=train_test_exp, separate_sh=separate_sh, cull_mask=mask_gaussian_obj_2)
+        
+        
+        image = output["render"] #[3,H,W]
+        language_feature = output["language_feature_image"]  #[3,H,W]
+
+        gt = view.original_image[0:3, :, :]
+        if args.train_test_exp:
+            image = image[..., image.shape[-1] // 2:]
+            gt = gt[..., gt.shape[-1] // 2:]
 
         torchvision.utils.save_image(image, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
         renderings.append(to8b(image.cpu().numpy()))
-        renderings_obj_2.append(to8b(image_obj_2.cpu().numpy()))
-    renderings = np.stack(renderings, 0).transpose(0,2,3,1)
-    imageio.mimwrite(os.path.join(render_path, 'mytime_video.mp4'), renderings, fps=30, quality=8)
-    renderings_obj_2 = np.stack(renderings_obj_2, 0).transpose(0,2,3,1)
-    imageio.mimwrite(os.path.join(render_path, 'mytime_video_obj_2.mp4'), renderings_obj_2, fps=30, quality=8)    
+        gts.append(to8b(gt.cpu().numpy()))
+    renderings = np.stack(renderings, 0).transpose(0,2,3,1) #[Frame,H,W,3]
+    imageio.mimwrite(os.path.join(render_path, 'mytime_video_rendering.mp4'), renderings, fps=30, quality=8)
+    gts = np.stack(gts, 0).transpose(0,2,3,1) #[Frame,H,W,3]
+    imageio.mimwrite(os.path.join(render_path, 'mytime_video_gt.mp4'), gts, fps=30, quality=8)
 
 def render_set(model_path, source_path, name, iteration, views, gaussians, pipeline, background, train_test_exp, separate_sh, args, load2gpu_on_the_fly, is_6dof, deform, mlp_model, dataset):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
@@ -134,7 +282,7 @@ def render_set(model_path, source_path, name, iteration, views, gaussians, pipel
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
 
-def interpolate_time(model_path, source_path, name, iteration, views, gaussians, pipeline, background, train_test_exp, separate_sh, args, load2gpu_on_the_fly, is_6dof, deform):
+def interpolate_time(model_path, source_path, name, iteration, views, gaussians, pipeline, background, train_test_exp, separate_sh, args, load2gpu_on_the_fly, is_6dof, deform, mlp_model, dataset):
     render_path = os.path.join(model_path, name, "interpolate_{}".format(iteration), "renders")
     depth_path = os.path.join(model_path, name, "interpolate_{}".format(iteration), "depth")
 
@@ -145,7 +293,8 @@ def interpolate_time(model_path, source_path, name, iteration, views, gaussians,
 
     frame = 150
     idx = torch.randint(0, len(views), (1,)).item()
-    view = views[idx]
+    #view = views[idx]
+    view = views[len(views) // 2]  # Choose the middle view for rendering
     renderings = []
     for t in tqdm(range(0, frame, 1), desc="Rendering progress"):
         fid = torch.Tensor([t / (frame - 1)]).cuda()
@@ -169,7 +318,7 @@ def interpolate_time(model_path, source_path, name, iteration, views, gaussians,
     imageio.mimwrite(os.path.join(render_path, 'video.mp4'), renderings, fps=30, quality=8)
 
 
-def interpolate_view(model_path, source_path, name, iteration, views, gaussians, pipeline, background, train_test_exp, separate_sh, args, load2gpu_on_the_fly, is_6dof, deform):
+def interpolate_view(model_path, source_path, name, iteration, views, gaussians, pipeline, background, train_test_exp, separate_sh, args, load2gpu_on_the_fly, is_6dof, deform, mlp_model, dataset):
     render_path = os.path.join(model_path, name, "interpolate_view_{}".format(iteration), "renders")
     depth_path = os.path.join(model_path, name, "interpolate_view_{}".format(iteration), "depth")
     # acc_path = os.path.join(model_path, name, "interpolate_view_{}".format(iteration), "acc")
@@ -182,7 +331,9 @@ def interpolate_view(model_path, source_path, name, iteration, views, gaussians,
     to8b = lambda x: (255 * np.clip(x, 0, 1)).astype(np.uint8)
 
     idx = torch.randint(0, len(views), (1,)).item()
-    view = views[idx]  # Choose a specific time for rendering
+    #view = views[idx]  # Choose a specific time for rendering
+    view = views[len(views) // 2]  # Choose the middle view for rendering
+    #view = views[10]  # Choose the first view for rendering
 
     render_poses = torch.stack(render_wander_path(view), 0)
     # render_poses = torch.stack([pose_spherical(angle, -30.0, 4.0) for angle in np.linspace(-180, 180, frame + 1)[:-1]],
@@ -190,7 +341,7 @@ def interpolate_view(model_path, source_path, name, iteration, views, gaussians,
 
     renderings = []
     for i, pose in enumerate(tqdm(render_poses, desc="Rendering progress")):
-        fid = view.fid
+        fid = view.fid.cuda()
 
         matrix = np.linalg.inv(np.array(pose))
         R = -np.transpose(matrix[:3, :3])
@@ -217,7 +368,7 @@ def interpolate_view(model_path, source_path, name, iteration, views, gaussians,
     imageio.mimwrite(os.path.join(render_path, 'video.mp4'), renderings, fps=30, quality=8)
 
 
-def interpolate_all(model_path, source_path, name, iteration, views, gaussians, pipeline, background, train_test_exp, separate_sh, args, load2gpu_on_the_fly, is_6dof, deform):
+def interpolate_all(model_path, source_path, name, iteration, views, gaussians, pipeline, background, train_test_exp, separate_sh, args, load2gpu_on_the_fly, is_6dof, deform, mlp_model, dataset):
     render_path = os.path.join(model_path, name, "interpolate_all_{}".format(iteration), "renders")
     depth_path = os.path.join(model_path, name, "interpolate_all_{}".format(iteration), "depth")
 
@@ -225,7 +376,7 @@ def interpolate_all(model_path, source_path, name, iteration, views, gaussians, 
     makedirs(depth_path, exist_ok=True)
 
     frame = 150
-    render_poses = torch.stack([pose_spherical(angle, -30.0, 4.0) for angle in np.linspace(-180, 180, frame + 1)[:-1]],
+    render_poses = torch.stack([pose_spherical(angle, 60.0, 30.0) for angle in np.linspace(-180, 180, frame + 1)[:-1]], #default is -30.0, 4.0
                                0)
     to8b = lambda x: (255 * np.clip(x, 0, 1)).astype(np.uint8)
 
@@ -361,7 +512,7 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
         gaussians = GaussianModel(dataset.sh_degree)
         #scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
         scene = Scene(dataset, gaussians, shuffle=False)
-        checkpoint = os.path.join(args.model_path, 'chkpnt80000-lang.pth')
+        checkpoint = os.path.join(args.model_path, 'chkpnt40000.pth')
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, args, dataset, mode='test')
         deform = DeformModel(dataset.is_blender, dataset.is_6dof)
@@ -386,6 +537,10 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
             render_func = interpolate_view_original
         elif args.mode == "mytime":
             render_func = render_mytime
+        elif args.mode == "mycull":
+            render_func = render_mycull
+        elif args.mode == "myview":
+            render_func = render_myview
         else:
             render_func = interpolate_all
         if not skip_train and scene.getTrainCameras():
@@ -406,7 +561,7 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--include_feature", action="store_true")
     parser.add_argument("--include_max_contrib", action="store_true")
-    parser.add_argument("--mode", default='render', choices=['render', 'time', 'view', 'all', 'pose', 'original', 'mytime', 'myview'])
+    parser.add_argument("--mode", default='render', choices=['render', 'time', 'view', 'all', 'pose', 'original', 'mytime', 'myview', 'mycull'])
     #parser.add_argument("--language_features_name", type=str, default="language_features.npy")
 
     args = get_combined_args(parser)

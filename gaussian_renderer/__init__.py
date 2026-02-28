@@ -17,7 +17,7 @@ from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 from utils.rigid_utils import from_homogenous, to_homogenous
 
-def render(viewpoint_camera, pc : GaussianModel, d_xyz, d_rotation, d_scaling, is_6dof, pipe, bg_color : torch.Tensor, opt, scaling_modifier = 1.0, separate_sh = False, override_color = None, use_trained_exp=False):
+def render(viewpoint_camera, pc : GaussianModel, d_xyz, d_rotation, d_scaling, is_6dof, pipe, bg_color : torch.Tensor, opt, scaling_modifier = 1.0, separate_sh = False, override_color = None, use_trained_exp=False, cull_mask=None):
     """
     Render the scene. 
     
@@ -64,7 +64,11 @@ def render(viewpoint_camera, pc : GaussianModel, d_xyz, d_rotation, d_scaling, i
     else:
         means3D = pc.get_xyz + d_xyz
     means2D = screenspace_points
-    opacity = pc.get_opacity
+    if cull_mask is None:
+        opacity = pc.get_opacity
+    else:
+        #set opacity to zero for culled gaussians
+        opacity = pc.get_opacity * (~cull_mask).float().unsqueeze(-1).detach()
 
     # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
     # scaling / rotation by the rasterizer.

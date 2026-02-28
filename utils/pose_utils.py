@@ -72,8 +72,8 @@ def render_wander_path(view):
     T = -view.T.reshape(-1, 1)
     pose = np.concatenate([R, T], -1)
 
-    num_frames = 60
-    max_disp = 5000.0  # 64 , 48
+    num_frames = 150 # default is 60
+    max_disp = 2500.0  # default is 5000 #64 , 48
 
     max_trans = max_disp / focal_length  # Maximum camera translation to satisfy max_disp parameter
     output_poses = []

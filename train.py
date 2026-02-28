@@ -144,6 +144,15 @@ def calculate_max_contrib_regularization(max_contrib, delta, viewpoint_cam, data
         return reg_loss
     else:
         return 0.0
+
+def get_gaussian_obj_mask(gaussians, mlp_model, obj_id):
+    with torch.no_grad():
+        gaussian_language_feature = gaussians.get_language_feature # [N,16]
+        gaussian_obj_id_distribution = mlp_model.step(gaussian_language_feature) # [N,16] -> [N,4]
+        gaussian_obj_id_prob = torch.softmax(gaussian_obj_id_distribution, dim=1) # [N,4]
+        mask_gaussian_obj = (gaussian_obj_id_prob[:,obj_id] > 0.3) # mask for object id 2 [N]
+        print ("Number of gaussians selected for object {}: {}/{}".format(obj_id, mask_gaussian_obj.sum().item(), mask_gaussian_obj.shape[0]))
+    return mask_gaussian_obj
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
 
     if not SPARSE_ADAM_AVAILABLE and opt.optimizer_type == "sparse_adam":
@@ -208,7 +217,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         end_value=0.05                       # or 0.0 if you want it to decay back
     )
     first_iter += 1
+
+    mask_gaussian_obj = None
+
     for iteration in range(first_iter, opt.iterations + 1):
+        if opt.cull_mask_enabled and (mask_gaussian_obj is None or iteration % 1000 == 0):
+            mask_gaussian_obj = get_gaussian_obj_mask(gaussians, mlp_model, obj_id=2)
         if network_gui.conn == None:
             network_gui.try_connect()
         while network_gui.conn != None:
@@ -266,7 +280,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         bg = torch.rand((3), device="cuda") if opt.random_background else background
 
-        render_pkg = render(viewpoint_cam, gaussians, d_xyz, d_rotation, d_scaling, dataset.is_6dof, pipe, bg, opt, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE)
+        render_pkg = render(viewpoint_cam, gaussians, d_xyz, d_rotation, d_scaling, dataset.is_6dof, pipe, bg, opt, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE, cull_mask=mask_gaussian_obj)
         image, language_feature, max_contrib, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["language_feature_image"], render_pkg["max_contrib"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         if viewpoint_cam.alpha_mask is not None:
@@ -398,7 +412,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 mlp_model.mlp.eval()
             training_report(tb_writer, iteration, Ll1, loss_without_reg, loss, l1_loss, iter_start.elapsed_time(iter_end), 
 							testing_iterations, scene, render, (pipe, background, opt, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset, deform,
-							dataset.load2gpu_on_the_fly, mlp_model)
+							dataset.load2gpu_on_the_fly, mlp_model, cull_mask = mask_gaussian_obj)
             if opt.include_feature:
                 mlp_model.mlp.train()
             if (iteration in saving_iterations):
@@ -481,7 +495,7 @@ def prepare_output_and_logger(args):
     return tb_writer
 
 def training_report(tb_writer, iteration, Ll1, loss_without_reg, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, 
-					renderArgs, dataset, deform, load2gpu_on_the_fly, mlp_model):
+					renderArgs, dataset, deform, load2gpu_on_the_fly, mlp_model, cull_mask=None):
     opt = renderArgs[2]
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
@@ -515,7 +529,7 @@ def training_report(tb_writer, iteration, Ll1, loss_without_reg, loss, l1_loss, 
                     else:
                         gt_image, mask = viewpoint.get_language_feature(language_feature_dir=dataset.lf_path, feature_level=dataset.feature_level) # [1,H,W]
 
-                        rendering = renderFunc(viewpoint, scene.gaussians, d_xyz, d_rotation, d_scaling, dataset.is_6dof, *renderArgs)["language_feature_image"] # [3,H,W]
+                        rendering = renderFunc(viewpoint, scene.gaussians, d_xyz, d_rotation, d_scaling, dataset.is_6dof, *renderArgs, cull_mask=cull_mask)["language_feature_image"] # [3,H,W]
                         language_feature_reshaped = rendering.permute(1, 2, 0).reshape(-1, dataset.langauge_feautre_dim) # [N,3]
                         obj_id_distribution = mlp_model.step(language_feature_reshaped) # [N,3] -> [N,4]
 
